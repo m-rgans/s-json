@@ -13,8 +13,12 @@ The form that a Node takes is referred to as its base type. This type can be que
 
 Type coercion happens whenever a Node is attempted to be used in a form other than its base type. This happens either when its type is changed, or when the user attempts to interpret it differently using `as_int`, `as_string`, etc. An invalid coercion will throw an instance of `coercion_invalid`.
 
+Calls to functions which return a mutable reference to the data do not automatically coerce. They will throw `wrong_type` if they are accessed incorrectly.
+
 ## Testing
 Since the library isn't yet able to actually parse json files, the only testing that can be done is on the Node class. `make test` should compile and run the tests.
+
+Testing uses gtest. This is not included, and will need to be installed on the machine. gtest is available as a package on apt.
 
 ## Todo
 At this point, most of the functionality.

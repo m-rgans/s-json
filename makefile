@@ -7,5 +7,8 @@ sjson_test: obj.cpp
 test: sjson_test
 	./$<
 
+debug: sjson_test
+	gdb ./$<
+
 clean:
 	rm -f sjson_test obj.cpp

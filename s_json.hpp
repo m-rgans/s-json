@@ -4,6 +4,7 @@
 #include <istream>
 #include <sstream>
 #include <string>
+#include <stack>
 #include <vector>
 #include <map>
 
@@ -34,7 +35,9 @@ namespace sjson
             typedef long int integer;
 
             class coercion_invalid:std::exception {};
+            class wrong_type : std::exception {};
             class json_invalid:std::exception {};
+
 
             // Parse from json
             static Node parse_from_istream(std::istream);
@@ -47,7 +50,7 @@ namespace sjson
             Node& operator=(const Node&);
 
             // todo: own comparison operators
-
+            Node();
             Node(const string&);
             Node(const real&);
             Node(const integer&);
@@ -64,19 +67,26 @@ namespace sjson
 
             //string
             string as_string() const;
+            string& as_string_mut();
             void set_string(string);
 
             //Number
             real as_real() const;
+            real& as_real_mut();
+
             integer as_int() const;
+            integer& as_int_mut();
+
             void set_number(real);
             void set_number(integer);
 
             //Array
             const array as_array() const;
+            array& as_array_mut();
             void set_array(std::vector<Node>);
 
             const object as_object() const;
+            object& as_object_mut();
             void set_object(const object&);
             
         private:
@@ -108,6 +118,7 @@ namespace sjson
 
     
 
+
 } // namespace sjson
 
 
@@ -132,6 +143,15 @@ namespace sjson {
     USE_SUBCLASS(Node, string);
     USE_SUBCLASS(Node, integer);
     USE_SUBCLASS(Node, real);
+
+    NodeType Node::get_type() const {
+        return base_type;
+    }
+
+    Node::Node() {
+        base_type = NONE;
+        variant = { nullptr };
+    }
 
     Node::Node(const Node& base) {
         _copy_variant(base);
@@ -220,6 +240,13 @@ namespace sjson {
         }
     }
 
+    Node::string& Node::as_string_mut() {
+        if (base_type != STRING) {
+            throw wrong_type();
+        }
+        return *variant.vstring;
+    }
+
     Node::real Node::as_real() const {
         switch (base_type)
         {
@@ -251,6 +278,13 @@ namespace sjson {
             throw coercion_invalid();
             break;
         }
+    }
+
+    Node::real& Node::as_real_mut() {
+        if (base_type != REAL) {
+            throw wrong_type();
+        }
+        return *variant.vreal;
     }
 
     Node::integer Node::as_int() const {
@@ -286,6 +320,13 @@ namespace sjson {
         }
     }
 
+    Node::integer& Node::as_int_mut() {
+        if (base_type != INTEGER) {
+            throw wrong_type();
+        }
+        return *variant.vinteger;
+    }
+
     const Node::array Node::as_array() const {
         switch (base_type)
         {
@@ -305,6 +346,13 @@ namespace sjson {
         }
     }
 
+    Node::array& Node::as_array_mut() {
+        if (base_type != ARRAY) {
+            throw wrong_type();
+        }
+        return *variant.varray;
+    }
+
     const object Node::as_object() const {
         switch (base_type)
         {
@@ -317,6 +365,13 @@ namespace sjson {
             default:
                 throw coercion_invalid();
         }
+    }
+
+    Node::object& Node::as_object_mut() {
+        if (base_type != ARRAY) {
+            throw wrong_type();
+        }
+        return *variant.vobject;
     }
 
     void Node::_destroy_variant() {
@@ -402,9 +457,187 @@ namespace sjson {
         return stream.str();
     }
 
-    Node Node::parse_from_istream(std::istream stream) {
+    // returns a negative number on failure
+    int get_next_non_space(const std::string& str, const unsigned int& start_position) {
 
+        for (int i = start_position; i < str.length(); i++) {
+            if (!std::isspace(str[i])) {
+                return i;
+            }
+        }
+
+        return -1;
     }
+
+    //obsolete
+    std::string clean_json_clause(const std::string& str) {
+        std::stringstream collect;
+        
+        bool in_string = false;
+        bool escaped = false; // allow for escaped quotes
+        for (const char& c : str) {
+            if (c == '"' && !escaped) {
+                in_string = !in_string;
+                collect << c;
+                continue;
+            }
+            if (in_string) {
+                if (c == '\\') {
+                    escaped = true;
+                    continue;
+                }
+                else {
+                    collect << c;
+                }
+            }
+            else {
+                if (!std::isspace(c)) {
+                    collect << c;
+                }
+            }
+        }
+
+        // remove trailing comma
+        std::string ret = collect.str();
+        if (ret[ret.length() - 1] == ',') {
+            return ret.substr(0,ret.length() - 1);
+        }
+        else {
+            return ret;
+        }
+    }
+
+    struct SeperatedClause {
+        bool has_name = false;
+        bool is_collection = false;
+        NodeType detected_type = NONE;
+        std::string name;
+        std::string content;
+        NodeType detect_type() {
+            if (content[0] == '"') {
+                return STRING;
+            }
+
+            if (is_collection) {
+                if (content[0] == '{') {
+                    return OBJECT;
+                }
+                else {
+                    return ARRAY;
+                }
+            }
+
+            // try numerics
+
+            {
+                bool decimal_point = false;
+                for (const char& c : content) {
+                    if (!isdigit(c) && c != '.') {
+                        goto NOT_NUMERIC; // im sorry
+                    }
+                    if (c == '.') {
+                        decimal_point = true;
+                    }
+                }
+                if (decimal_point) {
+                    return REAL;
+                }
+                else {
+                    return INTEGER;
+                }
+            }
+            NOT_NUMERIC:
+
+            return NONE;
+        }
+        SeperatedClause(const std::string& str) {
+
+            std::stringstream collect;
+
+            bool in_string = false;
+            bool escaped = false;
+            for (const char& c : str) {
+                // signifigant quote
+                if (c == '"' && !escaped) {
+                    in_string = !in_string;
+                    collect << c;
+                }
+                else if (in_string && c == '\\') {
+                    escaped = true;
+                }
+                else if (in_string) {
+                    // mutate char for escape if needed
+                    char fixed = c;
+                    if (escaped) {
+                        // fixed = escape_to_raw(c);
+                        escaped = false;
+                    }
+                    
+                    collect << fixed;
+                }
+                else if (c == '[' || c == '{') {
+                    // let the parse function handle this one
+                    is_collection = true;
+                    collect << c;
+                    break;
+                }
+                else if (c == ':') {
+                    name = collect.str();
+                    has_name = true;
+                    collect.str(std::string());
+                }
+                else {
+                    if (!std::isspace(c)) {
+                        collect << c;
+                    }
+                }
+            }
+
+            content = collect.str();
+
+            detected_type = detect_type();
+        }
+    };
+
+    struct ParsedClause {
+        std::string name;
+        bool has_name;
+        Node data;
+        ParsedClause(const std::string& str) {
+            SeperatedClause c(str);
+
+
+
+        }
+    };
+
+    Node Node::parse_from_istream(std::istream stream) {
+        /*
+            for each char in stream:
+                if char is { -> push object
+                if char is } -> pop object
+
+                if char is " set instring flag to true
+                if escaped is on, 
+        */
+
+        Node root;
+
+        std::stack<Node> nesting;
+        std::stringstream collect;
+
+        while (char c = stream.get()) {    
+            if (c == ',') {
+                ParsedClause clause(collect.str());
+                if (clause.has_name && (nesting.top().get_type() == ARRAY)) {
+                    throw json_invalid();
+                }
+
+            }
+        }
+    }
+
+
 
 }
 
@@ -412,8 +645,16 @@ namespace sjson {
 
 #ifdef SJSON_TEST
 
+#define DEBUG_PRINT(X) std::cerr << "[----------] " << X << '\n'
+
 #include <gtest/gtest.h>
 using sjson::Node;
+
+
+
+TEST(parse_helper, init) {
+
+}
 
 TEST(multitype, create_and_equivocate) {
     Node a((long int)10);
@@ -434,6 +675,90 @@ TEST(multitype, create_and_equivocate) {
     Node::array res = d.as_array();
     ASSERT_EQ(res[0].as_int(), 10);
     ASSERT_EQ(res[1].as_string(), "String");
+}
+
+TEST(json_parsing, clean_string) {
+    const std::string sample_str = "ddd  : \"m  \" pp,";
+    const std::string cleaned_str_correct = "ddd:\"m  \"pp";
+    const std::string cleaned = sjson::clean_json_clause(sample_str);
+    ASSERT_EQ(cleaned, cleaned_str_correct);
+}
+
+TEST(json_parsing, seperate_string) {
+
+    {
+        const std::string sample = "   dfd : abcde.f  f ";
+        const std::string correct_clause1 = "dfd";
+        const std::string correct_clause2 = "abcde.ff";
+
+        sjson::SeperatedClause test(sample);
+
+        ASSERT_EQ(test.name, correct_clause1);
+        ASSERT_EQ(test.content, correct_clause2);
+    }
+
+    {
+        const std::string sample_noname = "  443,33  2";
+        const std::string sample_noname_correct = "443,332";
+        sjson::SeperatedClause test2(sample_noname);
+        ASSERT_FALSE(test2.has_name);
+        ASSERT_EQ(test2.content, sample_noname_correct);
+    }
+
+    {
+        const std::string sample_collection = " big_thing:{abs:true;b:20}";
+        const std::string sample_collection_name = "big_thing";
+
+        sjson::SeperatedClause test(sample_collection);
+
+        ASSERT_TRUE(test.is_collection);
+        ASSERT_EQ(test.name, sample_collection_name);
+    }
+}
+
+TEST(json_parsing, type_detection) {
+    //numeric
+    {
+        const std::string int_example = "name:1234";
+        sjson::SeperatedClause test(int_example);
+        ASSERT_EQ(test.detected_type, sjson::INTEGER);
+    }
+    {
+        const std::string int_example = "name:123.34";
+        sjson::SeperatedClause test(int_example);
+        ASSERT_EQ(test.detected_type, sjson::REAL);
+    }
+
+    //string
+    {
+        const std::string int_example = "name:\"fucking deborah\"";
+        sjson::SeperatedClause test(int_example);
+        DEBUG_PRINT("Name:" << test.name);
+        DEBUG_PRINT("Content:" << test.content);
+        ASSERT_EQ(test.detected_type, sjson::STRING);
+    }
+
+    //array
+    {
+        DEBUG_PRINT("Array detection");
+        const std::string int_example = "name:[1,2,4,5,6]";
+        sjson::SeperatedClause test(int_example);
+        DEBUG_PRINT("Name:" << test.name);
+        DEBUG_PRINT("Content:" << test.content);
+        ASSERT_TRUE(test.is_collection);
+        ASSERT_EQ(test.detected_type, sjson::ARRAY);
+    }
+
+    //object
+    {
+        DEBUG_PRINT("Object Detection");
+        const std::string int_example = "name:{first:\"jay\", last: \"biz\"}";
+        sjson::SeperatedClause test(int_example);
+        DEBUG_PRINT("Name:" << test.name);
+        DEBUG_PRINT("Content:" << test.content);
+        ASSERT_EQ(test.detected_type, sjson::OBJECT);
+    }
+    
 }
 
 int main() {
