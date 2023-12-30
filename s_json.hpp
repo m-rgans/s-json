@@ -126,7 +126,7 @@ namespace sjson
 
 
 #ifdef SJSON_OBJECT
-
+#include <cassert>
 
 /*
 
@@ -505,7 +505,13 @@ namespace sjson {
         else {
             return ret;
         }
+
     }
+
+    // mixed recursion is the way to do it.
+    // left off here.
+
+    
 
     struct SeperatedClause {
         bool has_name = false;
@@ -513,6 +519,22 @@ namespace sjson {
         NodeType detected_type = NONE;
         std::string name;
         std::string content;
+
+        //returns a none if invalid
+        Node try_parse() {
+
+            try
+            {
+                Node node(content);
+                node.set_type(detect_type());
+            }
+            catch(const Node::coercion_invalid& e) {
+                
+            }
+
+            return Node();            
+
+        }
         NodeType detect_type() {
             if (content[0] == '"') {
                 return STRING;
@@ -599,17 +621,41 @@ namespace sjson {
         }
     };
 
-    struct ParsedClause {
-        std::string name;
-        bool has_name;
-        Node data;
-        ParsedClause(const std::string& str) {
-            SeperatedClause c(str);
-
-
-
+    //NOTE: just because the string contents are detected as a certain type,
+    // does NOT necessarily mean its valid as that type.
+    NodeType detect_node_type_str(const std::string& str) {
+        const char first_char = str[0];
+        if (first_char == '"') {
+            return STRING;
         }
-    };
+        else if (first_char == '{') {
+            return OBJECT;
+        }
+        else if (first_char == '[') {
+            return ARRAY;
+        }
+        // try numeric
+        else {
+            bool has_decimal = false;
+            for (const char& c : str) {
+                if (!isdigit(c)) {
+                    if (c != '+' && c != '-' && c != 'E' && c != 'e') {
+                        break;
+                    }
+                    else if (c == '.') {
+                        has_decimal = true;
+                    }
+                }
+            }
+        }
+        return NONE;
+    }
+
+    Node parse_str_to_node(const std::string& str) {
+        Node a(str);
+        a.set_type(detect_node_type_str(str));
+        return a;
+    }
 
     Node Node::parse_from_istream(std::istream stream) {
         /*
@@ -621,18 +667,249 @@ namespace sjson {
                 if escaped is on, 
         */
 
-        Node root;
+       // todo:
+       // * comment support
+       // * trailing commas (should already be supported, but untested)
+       // im not supporting unclosed objects thats ambiguous
 
-        std::stack<Node> nesting;
-        std::stringstream collect;
+        class ParseHelper {
+            public:
 
-        while (char c = stream.get()) {    
-            if (c == ',') {
-                ParsedClause clause(collect.str());
-                if (clause.has_name && (nesting.top().get_type() == ARRAY)) {
-                    throw json_invalid();
+
+                void parse(std::istream& stream) {
+
                 }
 
+                Node get_rood() {
+                    return root;
+                }
+            private:
+                
+                void apply_name() {
+                    Node filler;
+                    if (nest_stack.top().get_type() == OBJECT) {
+                        nest_stack.top().as_object_mut()[label] = filler;
+                    }
+                    // DONT CLEAR THE NAME! ITS NEEDED FOR COMMIT!
+                }
+
+                // This reference must point to the 
+                // node as it exists within root, not 
+                Node& add_node_assume_next(const Node& node) {
+                    Node& top = nest_stack.top();
+                    if (top.get_type() == OBJECT) {
+                        top.as_object_mut()[label] = node;
+                    }
+                    else if (top.get_type() == ARRAY) {
+                        top.as_array_mut().push_back(node);
+                    }
+                    else {
+                        assert(false);
+                    }
+                }
+
+                void push_array() {
+                    Node array(Node::array());
+                    add_node_assume_next(array);
+                }
+
+                void commit_collected() {
+                    Node& top = nest_stack.top();
+                    Node created = parse_str_to_node(collect.str());
+                    if (top.get_type() == OBJECT) {
+                        top.as_object_mut()[label] = created;
+                    }
+                    else if (top.get_type() == ARRAY) {
+                        
+                        top.as_array_mut().push_back(created);
+                    }
+
+                    label = "";
+                    collect.str("");
+                }
+
+                void parsechar(const char& c) {
+                    //todo
+                }
+
+                Node root;
+                // This represents a serious
+                // problem.
+                /*
+                    these nodes are getting shuffled around
+                    and reallocd in the vectors that hold them.
+                    these references simply wont survive.
+
+                    approaches:
+                        - emplace collections when they are popped, keeping them
+                          on the stack.
+
+                          This may work as it will always be the next item when popped.
+                          problem is that they might have labels, which would
+                          have been destroyed.
+                          
+                          parallel label stack, perhaps?
+                */
+                std::stack<Node&> nest_stack;
+
+                std::string label;
+                std::stringstream collect;
+
+                bool instring = false;
+                bool escaped = false;
+        } helper;
+
+        Node root;
+
+        // These are all owned by root
+        // maybe this should be a nested class or something
+        std::stack<Node&> nesting;
+        std::stringstream collect;
+
+        std::string label = "";
+
+        bool instring = false;
+        bool escaped = false;
+
+        while (char c = stream.get()) {
+
+            if (instring) {
+                switch (c)
+                {
+                case '\"':
+                    if (!escaped) {
+                        instring = false;
+                    }
+                    else {
+                        escaped = false;
+                    }
+                    break;
+                
+                case '\\':
+                    if (!escaped) {
+                        escaped = true;
+                    }
+                    else {
+                        escaped = false;
+                    }
+                    break;
+
+                default:
+                    escaped = false;
+                }
+
+                collect << c;
+            }
+            else {
+                switch (c) {
+                    case '{':
+                        //push object
+                        break;
+                    case '}':
+                        //parse collect
+                        //pop object
+                        break;
+                    
+                    case '[':
+                        //push array
+                    case ']':
+                        //parse collect
+                        //pop array
+                    
+                    case ':':
+                        // set name
+                        {
+                            label = collect.str();
+                            //todo: this isn't gonna work without
+                            //parsing collect as an str
+
+                            // clear collect
+                            collect.str("");
+                        }
+                        break;
+                    
+                    case ',':
+                        //parse object and return
+                    
+                    case ' ':
+                        // don't care
+                        break;
+
+                    case '1':
+                    case '2':
+                    case '3':
+                    case '4':
+                    case '5':
+                    case '6':
+                    case '7':
+                    case '8':
+                    case '9':
+                    case '0':
+                    case '.':
+                    case 'E':
+                    case 'e':
+                    case '+':
+                    case '-':
+                        collect << c;
+                    
+                    default:
+                        throw Node::json_invalid();
+                        break;
+                }
+            }
+
+            switch (c)
+            {
+            case '{':
+                //push object
+                continue;
+            case '}':
+                
+                continue;
+            
+            case '[':
+                //push array
+                continue;
+            case ']':
+                //pop array
+                continue;
+
+            case '\\':
+                if (!escaped) {
+                    escaped = true;
+                }
+
+            case '\"':
+                instring = !instring;
+                
+            case ',':
+                if (!escaped && !instring) {
+                    Node& top = nesting.top();
+                    if (top.get_type() == OBJECT) {
+
+                    }
+                    else if (top.get_type() == ARRAY) {
+
+                    }
+                    else {
+                        //assert false;
+                    }
+                }
+            break;
+
+            case ':':
+                {
+                    label = collect.str();
+                    collect.str("");
+                }
+                break;
+
+            case ' ':
+                break;
+            
+            default:
+                collect << c;
+                break;
             }
         }
     }
