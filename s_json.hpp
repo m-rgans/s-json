@@ -129,6 +129,7 @@ namespace sjson
 #include <cassert>
 
 #ifdef SJSON_TEST
+#include <iostream>
 #define DEBUG_PRINT(X) std::cerr << "[----------] " << X << '\n'
 #else
 #define DEBUG_PRINT(X)
@@ -221,6 +222,7 @@ namespace sjson {
             break;
         case NONE:
             *this = Node();
+            break;
         }
     }
 
@@ -477,9 +479,67 @@ namespace sjson {
         return stream.str();
     }
 
+    bool case_insensitive_equals(const char& c1, const char& c2) {
+        return std::tolower(static_cast<unsigned char>(c1)) == std::tolower(static_cast<unsigned char>(c1));
+    }
+
+    bool case_insensitive_equals(const std::string& s1, const std::string& s2) {
+        if (s1.length() != s2.length()) return false;
+
+        for (int i = 0; i < s1.length(); i++) {
+            if (!case_insensitive_equals(s1[i], s2[1])) return false;
+        }
+
+        return true;
+    }
+
+    static constexpr char QUOTE_OPEN = '"';
+    static constexpr char QUOTE_CLOSE = '"';
+
+    static constexpr char OBJECT_OPEN = '{';
+    static constexpr char OBJECT_CLOSE = '}';
+
+    static constexpr char ARRAY_OPEN = '[';
+    static constexpr char ARRAY_CLOSE = ']';
+
+    static constexpr char ESCAPE = '\\';
+
+    static constexpr char NAME_SPECIFIER = ':';
+    static constexpr char END_PHRASE = ',';
+
+    static constexpr char DECIMAL = '.';
+    static constexpr char SCIENTIFIC_NOTATION_LOWER = 'e';
+    static constexpr char SCIENTIFIC_NOTATION_UPPPER = 'E';
+    static constexpr char POSITIVE = '+';
+    static constexpr char NEGATIVE = '-';
+    static constexpr char JSON_NULL[] = "null";
+
+    bool json_is_numeric_char(const char& c) {
+        switch (c)
+        {
+        case DECIMAL:
+        case POSITIVE:
+        case NEGATIVE:
+        case SCIENTIFIC_NOTATION_LOWER:
+        case SCIENTIFIC_NOTATION_UPPPER:
+            return true;
+        
+        default:
+            break;
+        }
+
+        return std::isdigit(c);
+    }
+
     // NOTE: just because the string contents are detected as a certain type,
     // does NOT necessarily mean its valid as that type.
+    // expects the format of the tokenizer (leading quotes included)
     NodeType detect_node_type_str(const std::string& str) {
+        
+        if (case_insensitive_equals(JSON_NULL, str)) {
+            return NONE;
+        }
+
         const char first_char = str[0];
         if (first_char == '"') {
             return STRING;
@@ -494,22 +554,34 @@ namespace sjson {
         else {
             bool has_decimal = false;
             for (const char& c : str) {
-                if (!isdigit(c)) {
-                    if (c != '+' && c != '-' && c != 'E' && c != 'e') {
-                        break;
-                    }
-                    else if (c == '.') {
+                if (!json_is_numeric_char(c)) {
+                    if (c == '.') {
                         has_decimal = true;
                     }
                 }
+                else {
+                    // I don't know of any other way to break out of this if branch
+                    DEBUG_PRINT("Non numeric character " << c << ", interpreting as string.");
+                    goto NON_NUMERIC;
+                }
             }
+            return (has_decimal)? REAL:INTEGER;
         }
+        NON_NUMERIC:
+
         return NONE;
     }
 
     Node parse_str_to_node(const std::string& str) {
         Node a(str);
-        a.set_type(detect_node_type_str(str));
+        try {
+            a.set_type(detect_node_type_str(str));
+        }
+        catch (Node::coercion_invalid& e) {
+            // should throw or something.
+            // just interperet as an str for now
+        }
+        
         return a;
     }
 
@@ -539,22 +611,6 @@ namespace sjson {
         return '#';
     }
 
-    static constexpr char QUOTE_OPEN = '"';
-        static constexpr char QUOTE_CLOSE = '"';
-
-        static constexpr char OBJECT_OPEN = '{';
-        static constexpr char OBJECT_CLOSE = '}';
-
-        static constexpr char ARRAY_OPEN = '[';
-        static constexpr char ARRAY_CLOSE = ']';
-
-        static constexpr char ESCAPE = '\\';
-
-        static constexpr char NAME_SPECIFIER = ':';
-        static constexpr char END_PHRASE = ',';
-
-        static constexpr char DECIMAL = '.';
-
     // This function does not include
     // trailing quotes in the string it returns.
     // First is left in for signaling purposes
@@ -576,6 +632,11 @@ namespace sjson {
     }
 
     std::string get_next_json_token(std::istream& stream) {
+        
+        if (stream.eof()) {
+            return "";
+        }
+
         bool string = false;
         bool escaped = false;
 
@@ -583,28 +644,11 @@ namespace sjson {
 
         char c = stream.get();
 
-        //get to next value
-        while (isspace(c)) {c = stream.get();}
+        //get to next meaningful value
+        while (isspace(c)) {stream.get(c);}
 
-        // switch off first character
-        switch (c)
-        {
-        case QUOTE_OPEN:
-            string = true;
-            break;
-        
-        // These are all their own token, so return them seperately
-        case OBJECT_OPEN:
-        case OBJECT_CLOSE:
-        case ARRAY_OPEN:
-        case ARRAY_CLOSE:
-        case NAME_SPECIFIER:
-        case END_PHRASE:
-            return std::string(&c);
-
-        default:
-            break;
-        }
+        if (json_is_delimeter(c)) return std::string(&c);
+        if (c == QUOTE_OPEN) {string = true;}
 
         collect << c;
 
@@ -639,27 +683,6 @@ namespace sjson {
         return collect.str();
     }
 
-
-
-    class JsonParseHelper {
-        public:
-
-            typedef Node::string string;
-
-            // using these to make localization easier
-            
-
-            void parse_stream(std::istream& stream) {
-                do {
-                }
-                while (!nesting.empty());
-            }
-
-        private:
-            std::stack<Node> nesting;
-
-    };
-
     Node Node::parse_from_istream(std::istream stream) {
 
     }
@@ -674,12 +697,6 @@ namespace sjson {
 
 #include <gtest/gtest.h>
 using sjson::Node;
-
-
-
-TEST(parse_helper, init) {
-
-}
 
 TEST(multitype, create_and_equivocate) {
     Node a((long int)10);
@@ -790,7 +807,26 @@ TEST(json_parsing, type_detection) {
 }
 */
 
-TEST(json_parsing, tokenizer) {
+TEST(json_parser, type_detection) {
+    {
+        const std::string str = "\"string or ... something";
+        ASSERT_EQ(sjson::detect_node_type_str(str), sjson::STRING);
+    }
+    {
+        const std::string str = "262.848";
+        ASSERT_EQ(sjson::detect_node_type_str(str), sjson::REAL);
+    }
+    {
+        const std::string str = "44866";
+        ASSERT_EQ(sjson::detect_node_type_str(str), sjson::INTEGER);
+    }
+    {
+        const std::string str = "nULl";
+        ASSERT_EQ(sjson::detect_node_type_str(str), sjson::NONE);
+    }
+}
+
+TEST(json_parser, tokenizer) {
     const std::string test_str = "{fortnite ,balls  \t \n\n  : \"i'm   }\"gay I,like]boys";
     auto stream_proto = std::istringstream(test_str);
     std::istream& stream = stream_proto;
@@ -815,6 +851,8 @@ TEST(json_parsing, tokenizer) {
     ASSERT_EQ(sjson::get_next_json_token(stream),"boys");
     DEBUG_PRINT(__LINE__);
 }
+
+
 
 int main() {
     testing::InitGoogleTest();
