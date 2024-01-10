@@ -40,7 +40,7 @@ namespace sjson
 
 
             // Parse from json
-            static Node parse_from_istream(std::istream);
+            static Node parse_from_istream(std::istream&);
             static Node from_file_path(std::string);
             static Node parse_from_string(std::string);
             static Node parse_from_string(const char*);
@@ -269,16 +269,14 @@ namespace sjson {
 
         case INTEGER:
             return (double)*variant.vinteger;
-            break;
 
         case REAL:
             return *variant.vreal;
-            break;
 
         case STRING:
             {
                 try {
-                    std::stof(*variant.vstring);
+                    return std::stof(*variant.vstring);
                 }
                 catch (std::invalid_argument) {
                     throw coercion_invalid();
@@ -322,7 +320,7 @@ namespace sjson {
         case STRING:
             {
                 try {
-                    std::stoi(*variant.vstring);
+                    return std::stoi(*variant.vstring);
                 }
                 catch (std::invalid_argument) {
                     throw coercion_invalid();
@@ -522,13 +520,15 @@ namespace sjson {
         case NEGATIVE:
         case SCIENTIFIC_NOTATION_LOWER:
         case SCIENTIFIC_NOTATION_UPPPER:
+
             return true;
         
         default:
+            return std::isdigit( (unsigned char) c );
             break;
         }
 
-        return std::isdigit(c);
+        return false;
     }
 
     // NOTE: just because the string contents are detected as a certain type,
@@ -554,14 +554,14 @@ namespace sjson {
         else {
             bool has_decimal = false;
             for (const char& c : str) {
-                if (!json_is_numeric_char(c)) {
+                if (json_is_numeric_char(c)) {
                     if (c == '.') {
                         has_decimal = true;
                     }
                 }
                 else {
                     // I don't know of any other way to break out of this if branch
-                    DEBUG_PRINT("Non numeric character " << c << ", interpreting as string.");
+                    DEBUG_PRINT("Non numeric character (" << c << "), interpreting as string.");
                     goto NON_NUMERIC;
                 }
             }
@@ -647,7 +647,7 @@ namespace sjson {
         //get to next meaningful value
         while (isspace(c)) {stream.get(c);}
 
-        if (json_is_delimeter(c)) return std::string(&c);
+        if (json_is_delimeter(c)) return std::to_string(c);
         if (c == QUOTE_OPEN) {string = true;}
 
         collect << c;
@@ -683,7 +683,184 @@ namespace sjson {
         return collect.str();
     }
 
-    Node Node::parse_from_istream(std::istream stream) {
+    Node Node::parse_from_istream(std::istream& stream) {
+        
+        class ParseHelper {
+            public:
+
+                ParseHelper() {
+                    init_stack();
+                }
+
+                bool stack_empty() {
+                    return nesting.size() <= 1;
+                }
+
+                const Node& get_root() {
+                    // this function can only be used while the
+                    // stack is empty.
+                    assert(nesting.size() == 1);
+                    assert(nesting.top().get_type() == ARRAY);
+                    assert(nesting.top().as_array().size() == 1);
+                    return nesting.top().as_array()[0];
+                }
+
+                void parse_token(const std::string& token) {
+
+                    DEBUG_PRINT("Token:" << token);
+
+                    // build data tokens, then do something with them based on the following token
+
+                    //if any special tokens
+                    if (token.length() == 1) {
+                        const char c = token[0];
+                        switch (c)
+                        {
+                        case OBJECT_OPEN:
+                            push_object();
+                            break;
+                        case OBJECT_CLOSE:
+                            if (!top_is_object()) throw json_invalid();
+                            pop();
+                            break;
+                        
+                        case ARRAY_OPEN:
+                            push_array();
+                            break;
+                        case ARRAY_CLOSE:
+                            if (top_is_object()) throw json_invalid();
+                            pop();
+                        
+                        case NAME_SPECIFIER:
+                            set_as_label();
+                        
+                        case END_PHRASE:
+                            commit_token();
+
+                        default:
+                            break;
+                        }
+                    }
+                    else {
+                        Node derived = parse_str_to_node(token);
+                        last_data_token = derived;
+                    }
+                    
+
+                }
+
+            private:
+
+                bool top_is_object() {
+                    return nesting.top().get_type() == OBJECT;
+                }
+
+                void clear_label() {
+                    label_assigned = false;
+                }
+
+                void set_as_label() {
+                    label_assigned = true;
+                    label = last_data_token.as_string();
+                    clear_last_token();
+                }
+
+                const Node::string& get_label() {
+                    if (!label_assigned) throw json_invalid();
+                    return label;
+                }
+
+                // used after commas
+                void clear_last_token() {
+                    last_data_token = Node();
+                }
+
+                //Adds to the top node, at label if applicable
+                void append_data_node(const Node& node, const Node::string assigned_label) {
+
+                    if (top_is_object()) {
+
+                        nesting.top().as_object_mut()[assigned_label] = node;
+                        clear_label();
+
+                    }
+                    else {
+                        nesting.top().as_array_mut().push_back(node);
+                    }
+
+                }
+
+                void commit_token() {
+
+                    append_data_node(last_data_token, get_label());
+
+                }
+
+                void pop() {
+
+                    Node::string popped_label = "";
+
+                    if (top_is_object()) {
+                        popped_label = label_stack.top();
+                        label_stack.pop();
+                    }
+
+                    Node node = nesting.top(); nesting.pop();
+
+                    append_data_node(node,popped_label);
+
+                }
+
+                void push_nesting(const Node& node) {
+
+                    if (top_is_object()) {
+
+                        label_stack.push(get_label());
+                        clear_label();
+
+                    }
+
+                    nesting.push(node);
+                }
+
+                void push_object() {
+                    Node empty_object = Node(Node::object());
+                    push_nesting(empty_object);
+                }
+
+                void push_array() {
+                    Node empty_array = Node(Node::array());
+                    push_nesting(empty_array); 
+                }
+
+                void init_stack() {
+                    Node dummy_root = Node(array());
+                    nesting.push(dummy_root);
+                }
+
+                Node last_data_token;
+
+                // problem: we dont really have a way to differentiate if a label
+                // has actually been assigned
+                Node::string label = "";
+                bool label_assigned = false;
+
+                std::stack<Node> nesting;
+
+                std::stack<Node::string> label_stack;
+        };
+
+        ParseHelper helper;
+
+        //pushes initial object
+        helper.parse_token(get_next_json_token(stream));
+
+        while (!stream.eof() && !helper.stack_empty())
+        {
+            helper.parse_token(get_next_json_token(stream));
+        }
+        
+        return Node(helper.get_root());
 
     }
 
@@ -810,19 +987,36 @@ TEST(json_parsing, type_detection) {
 TEST(json_parser, type_detection) {
     {
         const std::string str = "\"string or ... something";
-        ASSERT_EQ(sjson::detect_node_type_str(str), sjson::STRING);
+        EXPECT_EQ(sjson::detect_node_type_str(str), sjson::STRING);
     }
     {
         const std::string str = "262.848";
-        ASSERT_EQ(sjson::detect_node_type_str(str), sjson::REAL);
+        EXPECT_EQ(sjson::detect_node_type_str(str), sjson::REAL);
     }
     {
         const std::string str = "44866";
-        ASSERT_EQ(sjson::detect_node_type_str(str), sjson::INTEGER);
+        EXPECT_EQ(sjson::detect_node_type_str(str), sjson::INTEGER);
     }
     {
         const std::string str = "nULl";
-        ASSERT_EQ(sjson::detect_node_type_str(str), sjson::NONE);
+        EXPECT_EQ(sjson::detect_node_type_str(str), sjson::NONE);
+    }
+}
+
+TEST(json_parser, string_translation) {
+    {
+        const std::string str = "\"string or ... something";
+        EXPECT_EQ(sjson::parse_str_to_node(str).as_string(), str);
+    }
+    {
+        const std::string str = "262.848";
+        const float test_value = 262.848;
+        EXPECT_EQ(sjson::parse_str_to_node(str).as_real(), test_value);
+    }
+    {
+        const std::string str = "44866";
+        const long int test_value = 44866;
+        EXPECT_EQ(sjson::parse_str_to_node(str).as_int(), test_value);
     }
 }
 
@@ -831,7 +1025,6 @@ TEST(json_parser, tokenizer) {
     auto stream_proto = std::istringstream(test_str);
     std::istream& stream = stream_proto;
 
-    DEBUG_PRINT(__LINE__);
     ASSERT_EQ(sjson::get_next_json_token(stream),"{");
     ASSERT_EQ(sjson::get_next_json_token(stream),"fortnite");
     ASSERT_EQ(sjson::get_next_json_token(stream),",");
@@ -839,20 +1032,27 @@ TEST(json_parser, tokenizer) {
     ASSERT_EQ(sjson::get_next_json_token(stream),":");
     ASSERT_EQ(sjson::get_next_json_token(stream),"\"i'm   }");
     ASSERT_EQ(sjson::get_next_json_token(stream),"gay");
-    DEBUG_PRINT(__LINE__);
     ASSERT_EQ(sjson::get_next_json_token(stream),"I");
-    DEBUG_PRINT(__LINE__);
     ASSERT_EQ(sjson::get_next_json_token(stream),",");
-    DEBUG_PRINT(__LINE__);
     ASSERT_EQ(sjson::get_next_json_token(stream),"like");
-    DEBUG_PRINT(__LINE__);
     ASSERT_EQ(sjson::get_next_json_token(stream),"]");
-    DEBUG_PRINT(__LINE__);
     ASSERT_EQ(sjson::get_next_json_token(stream),"boys");
-    DEBUG_PRINT(__LINE__);
 }
 
+TEST(json_parser, basic_file) {
+    const std::string test_str = "{\"basic\":123}";
+    auto stream_proto = std::istringstream(test_str);
+    std::istream& stream = stream_proto;
+    
+    Node parsed = sjson::Node::parse_from_istream(stream);
 
+    ASSERT_EQ(parsed.get_type(), sjson::OBJECT);
+    ASSERT_TRUE(parsed.as_object().count("basic") > 0);
+    Node basic = parsed.as_object().at("basic");
+    EXPECT_EQ(basic.get_type(), sjson::INTEGER);
+    EXPECT_EQ(basic.as_int(), 123);
+
+}
 
 int main() {
     testing::InitGoogleTest();
