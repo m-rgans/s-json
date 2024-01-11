@@ -542,6 +542,7 @@ namespace sjson {
 
                     if ( (line_number++) < ref.size() ) stream << END_PHRASE << '\n';
                     else stream << '\n';
+                    
                 }
             }
 

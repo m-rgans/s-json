@@ -15,6 +15,8 @@ Type coercion happens whenever a Node is attempted to be used in a form other th
 
 Calls to functions which return a mutable reference to the data do not automatically coerce. They will throw `wrong_type` if they are accessed incorrectly.
 
+`as_array_direct` and `as_object_direct` allow the underlying arrays and objects in a node to be directly accesed in order to conserve space while still allowing access to constant node collections. If you are certain that a node is an array or object, they are preferable over `as_array` and `as_object`.
+
 ## Testing
 Since the library isn't yet able to actually parse json files, the only testing that can be done is on the Node class. `make test` should compile and run the tests.
 
