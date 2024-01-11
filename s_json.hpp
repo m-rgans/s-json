@@ -45,6 +45,8 @@ namespace sjson
             static Node parse_from_string(std::string);
             static Node parse_from_string(const char*);
 
+            void write_as_json(std::ostream&);
+
             //todo: messagepack
 
             Node& operator=(const Node&);
@@ -68,6 +70,7 @@ namespace sjson
             //string
             string as_string() const;
             string& as_string_mut();
+            const string& as_string_reference() const;
             void set_string(string);
 
             //Number
@@ -83,10 +86,12 @@ namespace sjson
             //Array
             const array as_array() const;
             array& as_array_mut();
+            const array& as_array_reference() const;
             void set_array(std::vector<Node>);
 
             const object as_object() const;
             object& as_object_mut();
+            const object& as_object_reference() const;
             void set_object(const object&);
             
         private:
@@ -225,7 +230,7 @@ namespace sjson {
             break;
         }
     }
-
+ 
     Node::string Node::as_string() const {
         switch (base_type)
         {
@@ -252,9 +257,19 @@ namespace sjson {
             return _object_to_string(*variant.vobject);
             break;
         }
+
+        assert(false);
+        return "";
     }
 
     Node::string& Node::as_string_mut() {
+        if (base_type != STRING) {
+            throw wrong_type();
+        }
+        return *variant.vstring;
+    }
+
+    const Node::string& Node::as_string_reference() const {
         if (base_type != STRING) {
             throw wrong_type();
         }
@@ -278,7 +293,7 @@ namespace sjson {
                 try {
                     return std::stof(*variant.vstring);
                 }
-                catch (std::invalid_argument) {
+                catch (std::invalid_argument&) {
                     throw coercion_invalid();
                 }
             }
@@ -322,7 +337,7 @@ namespace sjson {
                 try {
                     return std::stoi(*variant.vstring);
                 }
-                catch (std::invalid_argument) {
+                catch (std::invalid_argument&) {
                     throw coercion_invalid();
                 }
             }
@@ -373,6 +388,13 @@ namespace sjson {
         return *variant.varray;
     }
 
+    const Node::array& Node::as_array_reference() const {
+        if (base_type != ARRAY) {
+            throw wrong_type();
+        }
+        return *variant.varray;
+    }
+
     const object Node::as_object() const {
         switch (base_type)
         {
@@ -388,6 +410,13 @@ namespace sjson {
     }
 
     Node::object& Node::as_object_mut() {
+        if (base_type != ARRAY) {
+            throw wrong_type();
+        }
+        return *variant.vobject;
+    }
+
+    const Node::object& Node::as_object_reference() const {
         if (base_type != ARRAY) {
             throw wrong_type();
         }
@@ -477,14 +506,74 @@ namespace sjson {
         return stream.str();
     }
 
+    //todo: test this
+    void write_as_json_recurse(const Node& node, int layer, std::ostream& stream, bool has_label = false, std::string label = "") {
+
+        stream << std::string( layer, '\t' );
+
+        if (has_label) {
+            stream << QUOTE_OPEN << label << QUOTE_CLOSE << NAME_SPECIFIER;
+        }
+
+        switch (node.get_type())
+        {
+        case REAL:
+            stream << node.as_real();
+            break;
+
+        case INTEGER:
+            stream << node.as_int();
+            break;
+        
+        case STRING:
+            stream << QUOTE_OPEN << node.as_string() << QUOTE_CLOSE;
+            break;
+        
+        case NONE:
+            stream << JSON_NULL;
+            break;
+
+        case ARRAY:
+            {
+                int line_number = 0;
+                const Node::array& ref = node.as_array_reference();
+                for (const Node& c : ref) {
+                    write_as_json_recurse(node, layer + 1, stream);
+
+                    if ( (line_number++) < ref.size() ) stream << END_PHRASE << '\n';
+                    else stream << '\n';
+                }
+            }
+
+        case OBJECT:
+            {
+                int line_number = 0;
+                const Node::object& ref = node.as_object_reference();
+
+                for (const auto& pair : ref) {
+                    write_as_json_recurse(pair.second, layer + 1, stream, true, pair.first);
+                    if ( (line_number++) < ref.size() ) stream << ",\n";
+                    else stream << '\n';
+                }
+            }
+
+        default:
+            break;
+        }
+    }
+
+    void Node::write_as_json(std::ostream&) {
+
+    }
+
     bool case_insensitive_equals(const char& c1, const char& c2) {
-        return std::tolower(static_cast<unsigned char>(c1)) == std::tolower(static_cast<unsigned char>(c1));
+        return std::tolower(static_cast<unsigned char>(c1)) == std::tolower(static_cast<unsigned char>(c2));
     }
 
     bool case_insensitive_equals(const std::string& s1, const std::string& s2) {
         if (s1.length() != s2.length()) return false;
 
-        for (int i = 0; i < s1.length(); i++) {
+        for (unsigned i = 0; i < s1.length(); i++) {
             if (!case_insensitive_equals(s1[i], s2[1])) return false;
         }
 
@@ -647,7 +736,7 @@ namespace sjson {
         //get to next meaningful value
         while (isspace(c)) {stream.get(c);}
 
-        if (json_is_delimeter(c)) return std::to_string(c);
+        if (json_is_delimeter(c)) return std::string(1,c);
         if (c == QUOTE_OPEN) {string = true;}
 
         collect << c;
@@ -684,7 +773,7 @@ namespace sjson {
     }
 
     Node Node::parse_from_istream(std::istream& stream) {
-        
+
         class ParseHelper {
             public:
 
@@ -696,7 +785,7 @@ namespace sjson {
                     return nesting.size() <= 1;
                 }
 
-                const Node& get_root() {
+                const Node get_root() {
                     // this function can only be used while the
                     // stack is empty.
                     assert(nesting.size() == 1);
@@ -730,12 +819,15 @@ namespace sjson {
                         case ARRAY_CLOSE:
                             if (top_is_object()) throw json_invalid();
                             pop();
+                            break;
                         
                         case NAME_SPECIFIER:
                             set_as_label();
+                            break;
                         
                         case END_PHRASE:
                             commit_token();
+                            break;
 
                         default:
                             break;
@@ -799,13 +891,12 @@ namespace sjson {
                 void pop() {
 
                     Node::string popped_label = "";
+                    Node node = nesting.top(); nesting.pop();
 
                     if (top_is_object()) {
                         popped_label = label_stack.top();
                         label_stack.pop();
                     }
-
-                    Node node = nesting.top(); nesting.pop();
 
                     append_data_node(node,popped_label);
 
@@ -1019,6 +1110,8 @@ TEST(json_parser, string_translation) {
         EXPECT_EQ(sjson::parse_str_to_node(str).as_int(), test_value);
     }
 }
+
+// todo: write json export for debugging visuals
 
 TEST(json_parser, tokenizer) {
     const std::string test_str = "{fortnite ,balls  \t \n\n  : \"i'm   }\"gay I,like]boys";
