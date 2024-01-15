@@ -110,23 +110,11 @@ namespace sjson
             NodeType base_type = NONE;
             bool number_is_integer = false;
 
-            // more troublesome, but saves on memory
-            // which is important for huge json files
-            // // maybe replace this with something involving virtual classes
-            union {
-                array* varray;
-                object* vobject;
-
-                string* vstring;
-
-                real* vreal;
-                integer* vinteger;
-            } variant;
-
-
             // in progress: better way of doing this than using union
             class MultiTypeBase {
                 public:
+                    // needed for frees
+                    virtual ~MultiTypeBase();
                     virtual NodeType get_type() const = 0;
 
                     virtual real as_real() const;
@@ -150,7 +138,7 @@ namespace sjson
             };
 
             //todo
-            //std::unique_ptr<MultiTypeBase> variant;
+            MultiTypeBase* variant;
 
             class Mnull : public MultiTypeBase {
                 public:
@@ -161,6 +149,8 @@ namespace sjson
 
             class MInt : public MultiTypeBase {
                 public:
+                    MInt(const integer& value);
+
                     NodeType get_type() const override;
                     integer as_int() const override;
                     integer& as_int_mut() override;
@@ -177,6 +167,8 @@ namespace sjson
 
             class MReal : public MultiTypeBase {
                 public:
+                    MReal(const real& value);
+
                     NodeType get_type() const override;
                     real as_real() const override;
                     real& as_real_mut() override;
@@ -191,6 +183,8 @@ namespace sjson
 
             class MString : public MultiTypeBase {
                 public:
+                    MString(const string& content);
+
                     NodeType get_type() const override;
                     real as_real() const override;
 
@@ -200,13 +194,15 @@ namespace sjson
                     string& as_string_mut() override;
                     const string& as_string_reference() override;
 
-                    array as_array() const override;
+                    //array as_array() const override;
                 private:
                     string value;
             };
 
             class MArray : public MultiTypeBase {
                 public:
+                    MArray(const array& v);
+
                     NodeType get_type() const override;
                     string as_string() const override;
 
@@ -219,6 +215,8 @@ namespace sjson
 
             class MObject : public MultiTypeBase {
                 public:
+                    MObject(const object& v);
+
                     NodeType get_type() const override;
                     string as_string() const override;
 
@@ -295,6 +293,7 @@ namespace sjson {
     // also shorter
 
     //==================================================
+    Node::MultiTypeBase::~MultiTypeBase() {}
     Node::real Node::MultiTypeBase::as_real() const {
         throw Node::coercion_invalid();
     }
@@ -343,7 +342,19 @@ namespace sjson {
         throw wrong_type();
     }
 
+    //= NULL =============================================
+    NodeType Node::Mnull::get_type() const {
+        return NONE;
+    }
+    Node::real Node::Mnull::as_real() const {
+        return 0;
+    }
+    Node::integer Node::Mnull::as_int() const {
+        return 0;
+    }
+
     //= INTEGER ==========================================
+    Node::MInt::MInt(const integer& v) : value(v) {}
     NodeType Node::MInt::get_type() const {
         return INTEGER;
     }
@@ -363,6 +374,7 @@ namespace sjson {
         return {value};
     }
     //= REAL =============================================
+    Node::MReal::MReal(const real& v) : value(v) {}
     NodeType Node::MReal::get_type() const {
         return REAL;
     }
@@ -382,6 +394,7 @@ namespace sjson {
         return {value};
     }
     //= STRING ===========================================
+    Node::MString::MString(const string& v) : value(v) {}
     NodeType Node::MString::get_type() const {
         return STRING;
     }
@@ -412,6 +425,7 @@ namespace sjson {
         }
     }
     //= ARRAY ============================================
+    Node::MArray::MArray(const array& v) : value(v) {}
     NodeType Node::MArray::get_type() const  {
         return ARRAY;
     }
@@ -425,8 +439,13 @@ namespace sjson {
         return value;
     }
 
+    Node::string Node::MArray::as_string() const {
+        return _array_to_string(value);
+    }
+
     //todo: tostring
     //= OBJECT ===========================================
+    Node::MObject::MObject(const object& v) : value(v) {}
     NodeType Node::MObject::get_type() const {
         return OBJECT;
     }
@@ -439,6 +458,9 @@ namespace sjson {
     const Node::object& Node::MObject::as_object_reference() const {
         return value;
     }
+    Node::string Node::MObject::as_string() const {
+        return _object_to_string(value);
+    }
 
     #define USE_SUBCLASS(CLASS,MEMBER_CLASS) typedef CLASS::MEMBER_CLASS MEMBER_CLASS
 
@@ -449,41 +471,35 @@ namespace sjson {
     USE_SUBCLASS(Node, real);
 
     NodeType Node::get_type() const {
-        return base_type;
+        return variant->get_type();
     }
 
     Node::Node() {
-        base_type = NONE;
-        variant = { nullptr };
+        variant = new Mnull();
     }
 
     Node::Node(const Node& base) {
-        _copy_variant(base);
+        variant = base.variant;
     }
 
     Node::Node(const string& content) {
-        base_type = STRING;
-        variant.vstring = new string(content);
+        variant = new MString(content);
     }
 
     Node::Node(const integer& content) {
-        base_type = INTEGER;
-        variant.vinteger = new integer(content);
+        variant = new MInt(content);
     }
 
     Node::Node(const real& content) {
-        base_type = REAL;
-        variant.vreal = new real(content);
+        variant = new MReal(content);
     }
 
     Node::Node(const array& content) {
-        base_type = ARRAY;
-        variant.varray = new array(content);
+        variant = new MArray(content);
     }
 
     Node::Node(const object& content) {
-        base_type = OBJECT;
-        variant.vobject = new object(content);
+        variant = new MObject(content);
     }
 
     Node& Node::operator=(const Node& other) {
@@ -524,251 +540,89 @@ namespace sjson {
     }
  
     Node::string Node::as_string() const {
-        switch (base_type)
-        {
-        case NONE:
-            return "";
-
-        case INTEGER:
-            return std::to_string(*variant.vinteger);
-            break;
-
-        case REAL:
-            return std::to_string(*variant.vreal);
-            break;
-
-        case STRING:
-            return *variant.vstring;
-            break;
-
-        case ARRAY:
-            return _array_to_string(*variant.varray);
-            break;
-
-        case OBJECT:
-            return _object_to_string(*variant.vobject);
-            break;
-        }
-
-        assert(false);
-        return "";
+        return variant->as_string();
     }
 
     Node::string& Node::as_string_mut() {
-        if (base_type != STRING) {
-            throw wrong_type();
-        }
-        return *variant.vstring;
+        return variant->as_string_mut();
     }
 
     const Node::string& Node::as_string_reference() const {
-        if (base_type != STRING) {
-            throw wrong_type();
-        }
-        return *variant.vstring;
+        return variant->as_string_reference();
     }
 
     Node::real Node::as_real() const {
-        switch (base_type)
-        {
-        case NONE:
-            return 0.0;
-
-        case INTEGER:
-            return (double)*variant.vinteger;
-
-        case REAL:
-            return *variant.vreal;
-
-        case STRING:
-            {
-                try {
-                    return std::stof(*variant.vstring);
-                }
-                catch (std::invalid_argument&) {
-                    throw coercion_invalid();
-                }
-            }
-            break;
-
-        case ARRAY:
-        case OBJECT:
-        default:
-            throw coercion_invalid();
-            break;
-        }
-
-        // Should be unreachable
-        assert(false);
-        return 0.0; // remove a warning
+        return variant->as_real();
     }
 
     Node::real& Node::as_real_mut() {
-        if (base_type != REAL) {
-            throw wrong_type();
-        }
-        return *variant.vreal;
+        return variant->as_real_mut();
     }
 
     Node::integer Node::as_int() const {
-        switch (base_type)
-        {
-        case NONE:
-            return 0;
-
-        case INTEGER:
-            return *variant.vinteger;
-            break;
-
-        case REAL:
-            return (integer)*variant.vreal;
-            break;
-
-        case STRING:
-            {
-                try {
-                    return std::stoi(*variant.vstring);
-                }
-                catch (std::invalid_argument&) {
-                    throw coercion_invalid();
-                }
-            }
-            break;
-
-        case ARRAY:
-        case OBJECT:
-        default:
-            throw coercion_invalid();
-            break;
-        }
-
-        // unreachable
-        assert(false);
-        return 0;
+        return variant->as_int();
     }
 
     Node::integer& Node::as_int_mut() {
-        if (base_type != INTEGER) {
-            throw wrong_type();
-        }
-        return *variant.vinteger;
+        return variant->as_int_mut();
     }
 
     const Node::array Node::as_array() const {
-        switch (base_type)
-        {
-        // Return a single element array
-        case NONE:
-        case INTEGER:
-        case REAL:
-            return {*this};
-            break;
-        
-        case ARRAY:
-            return *variant.varray;
-        
-        case OBJECT:
-        default:
-            throw coercion_invalid();
-        }
+        return variant->as_array();
     }
 
     Node::array& Node::as_array_mut() {
-        if (base_type != ARRAY) {
-            throw wrong_type();
-        }
-        return *variant.varray;
+        return variant->as_array_mut();
     }
 
     const Node::array& Node::as_array_reference() const {
-        if (base_type != ARRAY) {
-            throw wrong_type();
-        }
-        return *variant.varray;
+        return variant->as_array_reference();
     }
 
     const object Node::as_object() const {
-        switch (base_type)
-        {
-            case OBJECT:
-                return *variant.vobject;
-            case NONE:
-            case INTEGER:
-            case REAL:
-            case ARRAY:
-            default:
-                throw coercion_invalid();
-        }
+        return variant->as_object();
     }
 
     Node::object& Node::as_object_mut() {
-        if (base_type != OBJECT) {
-            throw wrong_type();
-        }
-        return *variant.vobject;
+        return variant->as_object_mut();
     }
 
     const Node::object& Node::as_object_reference() const {
-        if (base_type != OBJECT) {
-            throw wrong_type();
-        }
-        return *variant.vobject;
+        return variant->as_object_reference();
     }
 
     void Node::_destroy_variant() {
-        switch (base_type)
-        {
-        case NONE:
-            break;
-
-        case INTEGER:
-            delete variant.vinteger;
-            break;
-
-        case REAL:
-            delete variant.vreal;
-            break;
-
-        case STRING:
-            delete variant.vstring;
-            break;
-
-        case ARRAY:
-            delete variant.varray;
-            break;
-
-        case OBJECT:
-            delete variant.vobject;
-            break;
-        }
+        delete variant;
+        variant = nullptr;
     }
 
     void Node::_copy_variant(const Node& base) {
         _destroy_variant();
-        base_type = base.base_type;
-        switch (base_type)
+        
+        switch (base.get_type())
         {
         case NONE:
+            variant = new Mnull();
             break;
 
         case INTEGER:
-            variant.vinteger = new integer(*base.variant.vinteger);
+            variant = new MInt(base.as_int());
             break;
 
         case REAL:
-            variant.vreal = new real(*base.variant.vreal);
+            variant = new MReal(base.as_real());
             break;
 
         case STRING:
-            variant.vstring = new string(*base.variant.vstring);
+            variant = new MString(base.as_string_reference());
             break;
 
         case ARRAY:
-            variant.varray = new array(*base.variant.varray);
+            variant = new MArray(base.as_array_reference());
             break;
 
         case OBJECT:
-            variant.vobject = new object(*base.variant.vobject);
+            variant = new MObject(base.as_object_reference());
             break;
         }
     }
