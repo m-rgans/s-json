@@ -121,10 +121,45 @@ namespace sjson
                 integer* vinteger;
             } variant;
 
+
+            // in progress: better way of doing this than using union
+            class MultiTypeBase {
+                
+                virtual real as_real() const;
+                virtual real& as_real_mut();
+                
+                virtual integer as_int() const;
+                virtual integer& as_int_mut();
+
+                virtual string as_string() const;
+                virtual string& as_string_mut();
+                virtual const string& as_string_reference();
+
+                virtual array as_array() const;
+                virtual array& as_array_mut();
+                virtual array& as_array_reference() const;
+
+                virtual object as_object() const;
+                virtual object& as_object_mut();
+                virtual const object& as_object_reference() const;
+
+            };
+
     };
 
     
-
+    namespace json {
+        class json_invalid : public std::exception {};
+        class missing_delimeter : public json_invalid {};
+        class missing_label : public json_invalid {};
+        class wrong_delimeter : public json_invalid {};
+        class wrong_label_type : public json_invalid {};
+        class wrong_closer : public json_invalid {};
+        class trailing_comma : public json_invalid {};
+        class duplicate_label : public json_invalid {};
+        class label_in_array: public json_invalid{};
+        class missing_definition: public json_invalid{};
+    }
 
 } // namespace sjson
 
@@ -801,189 +836,241 @@ namespace sjson {
 
         class ParseHelper {
             public:
-
-                ParseHelper() {
-                    init_stack();
-                }
-
-                bool stack_empty() {
-                    return nesting.size() <= 1;
-                }
-
-                const Node get_root() {
-                    // this function can only be used while the
-                    // stack is empty.
-                    assert(nesting.size() == 1);
-                    assert(nesting.top().get_type() == ARRAY);
-                    assert(nesting.top().as_array().size() == 1);
-                    return nesting.top().as_array()[0];
-                }
-
                 void parse_token(const std::string& token) {
 
-                    DEBUG_PRINT("Token:" << token);
+                    DEBUG_PRINT("Token: " << token);
 
-                    // build data tokens, then do something with them based on the following token
-
-                    //if any special tokens
                     if (token.length() == 1) {
                         const char c = token[0];
+
                         switch (c)
                         {
                         case OBJECT_OPEN:
                             push_object();
-                            break;
+                            return;
                         case OBJECT_CLOSE:
-                            if (!top_is_object()) throw json_invalid();
+                            if (!top_is_object()) throw json::wrong_closer();
                             pop();
-                            break;
+                            return;
                         
                         case ARRAY_OPEN:
                             push_array();
-                            break;
+                            return;
                         case ARRAY_CLOSE:
-                            if (top_is_object()) throw json_invalid();
+                            if (!top_is_array()) throw json::wrong_closer();
                             pop();
-                            break;
-                        
+                            return;
+
                         case NAME_SPECIFIER:
-                            set_as_label();
-                            break;
+                            current.set_label_as_node();
+                            return;
                         
                         case END_PHRASE:
-                            commit_token();
-                            break;
+                            append_to_top(current);
+                            current = StatementBuilder();
+                            return;
 
                         default:
                             break;
                         }
                     }
-                    else {
-                        Node derived = parse_str_to_node(token);
-                        last_data_token = derived;
-                        token_assigned = true;
-                    }
                     
+                    // must be definition
+                    if (current.is_node_assigned()) {
+                        throw json::missing_delimeter();
+                    }
 
+
+                    Node derived = parse_str_to_node(token);
+                    current.set_node(derived);
+                    
+                }
+
+                bool done() const {
+                    return _done;
+                }
+
+                Node get_root() const {
+                    if (done()) {
+                        return root;
+                    }
+                    else {
+                        DEBUG_PRINT("STACK NOT EMPTY!!!");
+                    }
                 }
 
             private:
 
+                // Class represents partial statements
+                class StatementBuilder {
+                    public:
+
+                        class no_label : public std::exception {};
+                        class no_token : public std::exception {};
+
+                        bool is_label_assigned() const {
+                            return label_assigned;
+                        }
+                        void set_label(const Node::string base) {
+                            label = base;
+                            label_assigned = true;
+                        }
+                        const Node::string& get_label() const {
+                            if (label_assigned) {
+                                return label;
+                            }
+                            else {
+                                throw no_label();
+                            }
+                        }
+
+                        bool is_node_assigned() const {
+                            return token_assigned;
+                        }
+                        void set_node(const Node base) {
+                            token = base;
+                            token_assigned = true;
+                        }
+                        Node& get_node_mut() {
+                            if (token_assigned) {
+                                return token;
+                            }
+                            else {
+                                throw no_token();
+                            }
+                        }
+                        const Node& get_node() const {
+                            if (token_assigned) {
+                                return token;
+                            }
+                            else {
+                                throw no_token();
+                            }
+                        }
+
+                        void set_label_as_node() {
+                            if (token.get_type() == STRING) {
+                                set_label(token.as_string_reference());
+                                token = Node();
+                                token_assigned = false;
+                            }
+                            else {
+                                //throw
+                            }
+                        }
+                    private:
+                        Node::string label;
+                        bool label_assigned = false;
+
+                        Node token;
+                        bool token_assigned = false;
+                };
+
+                bool top_is_array() {
+                    return top_type() == ARRAY;
+                }
+
                 bool top_is_object() {
-                    return nesting.top().get_type() == OBJECT;
-                }
-
-                void clear_label() {
-                    label_assigned = false;
-                }
-
-                void set_as_label() {
-                    label_assigned = true;
-                    label = last_data_token.as_string();
-                    clear_last_token();
-                }
-
-                const Node::string& get_label() {
-                    if (!label_assigned) throw json_invalid();
-                    return label;
-                }
-
-                // used after commas
-                void clear_last_token() {
-                    last_data_token = Node();
-                }
-
-                //Adds to the top node, at label if applicable
-                void append_data_node(const Node& node, const Node::string assigned_label) {
-
-                    if (top_is_object()) {
-
-                        nesting.top().as_object_mut()[assigned_label] = node;
-                        clear_label();
-
-                    }
-                    else {
-                        nesting.top().as_array_mut().push_back(node);
-                    }
-
-                }
-
-                void commit_token() {
-                    DEBUG_PRINT("committing");
-                    append_data_node(last_data_token, get_label());
-                    last_data_token = Node(); // clear data token
-                    token_assigned = false;
-                }
-
-                void pop() {
-                    
-                    // if there's a token waiting
-                    if (token_assigned) {
-                        commit_token();
-                    }
-                    else {
-                        #if !JSON_ALLOW_TRAILING_COMMA
-                            throw Node::json_invalid;
-                        #endif
-                    }
-
-                    Node::string popped_label = "";
-                    Node node = nesting.top(); nesting.pop();
-
-                    if (top_is_object()) {
-                        popped_label = label_stack.top();
-                        label_stack.pop();
-                    }
-
-                    append_data_node(node,popped_label);
-
-                }
-
-                void push_nesting(const Node& node) {
-
-                    if (top_is_object()) {
-
-                        label_stack.push(get_label());
-                        clear_label();
-
-                    }
-
-                    nesting.push(node);
-                }
-
-                void push_object() {
-                    Node empty_object = Node(Node::object());
-                    push_nesting(empty_object);
+                    return top_type() == OBJECT;
                 }
 
                 void push_array() {
-                    Node empty_array = Node(Node::array());
-                    push_nesting(empty_array); 
+                    Node dummy = Node(Node::array());
+                    current.set_node(dummy);
+                    push_current();
                 }
 
-                void init_stack() {
-                    Node dummy_root = Node(array());
-                    nesting.push(dummy_root);
+                void push_object() {
+                    Node dummy = Node(Node::object());
+                    current.set_node(dummy);
+                    push_current();
                 }
 
-                Node last_data_token;
-                bool token_assigned = false;
+                void push_current() {
+                    nest_stack.push(current);
+                    current = StatementBuilder();
+                }
 
-                Node::string label = "";
-                bool label_assigned = false;
+                void pop() {
+                    if (current.is_node_assigned()) {
+                        append_to_top(current);
+                    }
+                    #if !JSON_ALLOW_TRAILING_COMMA
+                    else {
+                        throw json::trailing_comma();
+                    }
+                    #endif
+                    StatementBuilder popped = top();
+                    nest_stack.pop();
+                    if (nest_stack.size() == 0) {
+                        root = popped.get_node();
+                        _done = true;
+                        return;
+                    }
+                    else {
+                        current = popped;
+                    }
+                    
+                    //append_to_top(popped);
+                }
 
-                std::stack<Node> nesting;
+                void append_to_top(const StatementBuilder& st) {
+                    if (top_is_object()) {
+                        try {
+                            const Node::string label = st.get_label();
+                            Node::object& map = top_mut().get_node_mut().as_object_mut();
+                            if (map.count(label) > 0) throw json::duplicate_label();
+                            map[label] = st.get_node();
+                        }
+                        catch (StatementBuilder::no_label& e) {
+                            throw json::missing_label();
+                        }
+                    }
+                    else if (top_is_array()) {
+                        if (st.is_label_assigned()) {
+                            throw json::label_in_array();
+                        }
+                        try {
+                            Node::array& array = top_mut().get_node_mut().as_array_mut();
+                            array.push_back(st.get_node());
+                        }
+                        catch (StatementBuilder::no_token& e) {
+                            throw json::missing_definition();
+                        }
+                    }
+                }
+                
+                NodeType top_type() const {
+                    if (!done()) {
+                        return top().get_node().get_type();
+                    }
+                    else {
+                        return root.get_type();
+                    }
+                }
 
-                std::stack<Node::string> label_stack;
+                StatementBuilder& top_mut() {
+                    return nest_stack.top();
+                }
+
+                const StatementBuilder& top() const {
+                    return nest_stack.top();
+                }
+
+                std::stack<StatementBuilder> nest_stack;
+                StatementBuilder current;
+
+                // only valid after everything is popped
+                bool _done = false;
+                Node root;
         };
-
 
         ParseHelper helper;
 
         //pushes initial object
         helper.parse_token(get_next_json_token(stream));
 
-        while (!stream.eof() && !helper.stack_empty())
+        while (!stream.eof() && !helper.done())
         {
             helper.parse_token(get_next_json_token(stream));
         }
