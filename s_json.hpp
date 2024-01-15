@@ -127,6 +127,8 @@ namespace sjson
             // in progress: better way of doing this than using union
             class MultiTypeBase {
                 public:
+                    virtual NodeType get_type() const = 0;
+
                     virtual real as_real() const;
                     virtual real& as_real_mut();
                     
@@ -152,19 +154,21 @@ namespace sjson
 
             class Mnull : public MultiTypeBase {
                 public:
-                    virtual real as_real() const override;
-                    virtual integer as_int() const override;
+                    NodeType get_type() const override;
+                    real as_real() const override;
+                    integer as_int() const override;
             };
 
             class MInt : public MultiTypeBase {
                 public:
-                    virtual integer as_int() const override;
-                    virtual integer& as_int_mut() override;
+                    NodeType get_type() const override;
+                    integer as_int() const override;
+                    integer& as_int_mut() override;
 
-                    virtual real as_real() const override;
+                    real as_real() const override;
 
-                    virtual string as_string() const override;
-                    virtual array as_array() const override;
+                    string as_string() const override;
+                    array as_array() const override;
 
                 private:
                     integer value;
@@ -173,50 +177,54 @@ namespace sjson
 
             class MReal : public MultiTypeBase {
                 public:
-                    virtual real as_real() const override;
-                    virtual real& as_real_mut() override;
+                    NodeType get_type() const override;
+                    real as_real() const override;
+                    real& as_real_mut() override;
 
-                    virtual integer as_int() const override;
+                    integer as_int() const override;
 
-                    virtual string as_string() const override;
-                    virtual array as_array() const override;
+                    string as_string() const override;
+                    array as_array() const override;
                 private:
                     real value;
             };
 
             class MString : public MultiTypeBase {
                 public:
-                    virtual real as_real() const override;
+                    NodeType get_type() const override;
+                    real as_real() const override;
 
-                    virtual integer as_int() const override;
+                    integer as_int() const override;
 
-                    virtual string as_string() const override;
-                    virtual string& as_string_mut() override;
-                    virtual const string& as_string_reference() override;
+                    string as_string() const override;
+                    string& as_string_mut() override;
+                    const string& as_string_reference() override;
 
-                    virtual array as_array() const override;
+                    array as_array() const override;
                 private:
                     string value;
             };
 
             class MArray : public MultiTypeBase {
                 public:
-                    virtual string as_string() const override;
+                    NodeType get_type() const override;
+                    string as_string() const override;
 
-                    virtual array as_array() const override;
-                    virtual array& as_array_mut() override;
-                    virtual const array& as_array_reference() const override;
+                    array as_array() const override;
+                    array& as_array_mut() override;
+                    const array& as_array_reference() const override;
                 private:
                     array value;
             };
 
             class MObject : public MultiTypeBase {
                 public:
-                    virtual string as_string() const override;
+                    NodeType get_type() const override;
+                    string as_string() const override;
 
-                    virtual object as_object() const override;
-                    virtual object& as_object_mut() override;
-                    virtual const object& as_object_reference() const override;
+                    object as_object() const override;
+                    object& as_object_mut() override;
+                    const object& as_object_reference() const override;
                 private:
                     object value;
             };
@@ -336,6 +344,9 @@ namespace sjson {
     }
 
     //= INTEGER ==========================================
+    NodeType Node::MInt::get_type() const {
+        return INTEGER;
+    }
     Node::integer Node::MInt::as_int() const {
         return value;
     }
@@ -352,6 +363,9 @@ namespace sjson {
         return {value};
     }
     //= REAL =============================================
+    NodeType Node::MReal::get_type() const {
+        return REAL;
+    }
     Node::real Node::MReal::as_real() const {
         return value;
     }
@@ -368,6 +382,9 @@ namespace sjson {
         return {value};
     }
     //= STRING ===========================================
+    NodeType Node::MString::get_type() const {
+        return STRING;
+    }
     Node::string Node::MString::as_string() const {
         return value;
     }
@@ -395,6 +412,9 @@ namespace sjson {
         }
     }
     //= ARRAY ============================================
+    NodeType Node::MArray::get_type() const  {
+        return ARRAY;
+    }
     Node::array Node::MArray::as_array() const {
         return value;
     }
@@ -407,6 +427,9 @@ namespace sjson {
 
     //todo: tostring
     //= OBJECT ===========================================
+    NodeType Node::MObject::get_type() const {
+        return OBJECT;
+    }
     Node::object Node::MObject::as_object() const {
         return value;
     }
