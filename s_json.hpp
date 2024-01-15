@@ -7,6 +7,7 @@
 #include <stack>
 #include <vector>
 #include <map>
+#include <memory>
 
 // temporary so vs code isnt a pain about it
 #define SJSON_OBJECT
@@ -28,6 +29,7 @@ namespace sjson
     class Node {
         public:
 
+            //idea: byte type for better msgpk compat
             typedef std::string string;
             typedef std::map<string, Node> object;
             typedef std::vector<Node> array;
@@ -124,25 +126,99 @@ namespace sjson
 
             // in progress: better way of doing this than using union
             class MultiTypeBase {
-                
-                virtual real as_real() const;
-                virtual real& as_real_mut();
-                
-                virtual integer as_int() const;
-                virtual integer& as_int_mut();
+                public:
+                    virtual real as_real() const;
+                    virtual real& as_real_mut();
+                    
+                    virtual integer as_int() const;
+                    virtual integer& as_int_mut();
 
-                virtual string as_string() const;
-                virtual string& as_string_mut();
-                virtual const string& as_string_reference();
+                    virtual string as_string() const;
+                    virtual string& as_string_mut();
+                    virtual const string& as_string_reference();
 
-                virtual array as_array() const;
-                virtual array& as_array_mut();
-                virtual array& as_array_reference() const;
+                    virtual array as_array() const;
+                    virtual array& as_array_mut();
+                    virtual const array& as_array_reference() const;
 
-                virtual object as_object() const;
-                virtual object& as_object_mut();
-                virtual const object& as_object_reference() const;
+                    virtual object as_object() const;
+                    virtual object& as_object_mut();
+                    virtual const object& as_object_reference() const;
 
+            };
+
+            //todo
+            //std::unique_ptr<MultiTypeBase> variant;
+
+            class Mnull : public MultiTypeBase {
+                public:
+                    virtual real as_real() const override;
+                    virtual integer as_int() const override;
+            };
+
+            class MInt : public MultiTypeBase {
+                public:
+                    virtual integer as_int() const override;
+                    virtual integer& as_int_mut() override;
+
+                    virtual real as_real() const override;
+
+                    virtual string as_string() const override;
+                    virtual array as_array() const override;
+
+                private:
+                    integer value;
+
+            };
+
+            class MReal : public MultiTypeBase {
+                public:
+                    virtual real as_real() const override;
+                    virtual real& as_real_mut() override;
+
+                    virtual integer as_int() const override;
+
+                    virtual string as_string() const override;
+                    virtual array as_array() const override;
+                private:
+                    real value;
+            };
+
+            class MString : public MultiTypeBase {
+                public:
+                    virtual real as_real() const override;
+
+                    virtual integer as_int() const override;
+
+                    virtual string as_string() const override;
+                    virtual string& as_string_mut() override;
+                    virtual const string& as_string_reference() override;
+
+                    virtual array as_array() const override;
+                private:
+                    string value;
+            };
+
+            class MArray : public MultiTypeBase {
+                public:
+                    virtual string as_string() const override;
+
+                    virtual array as_array() const override;
+                    virtual array& as_array_mut() override;
+                    virtual const array& as_array_reference() const override;
+                private:
+                    array value;
+            };
+
+            class MObject : public MultiTypeBase {
+                public:
+                    virtual string as_string() const override;
+
+                    virtual object as_object() const override;
+                    virtual object& as_object_mut() override;
+                    virtual const object& as_object_reference() const override;
+                private:
+                    object value;
             };
 
     };
@@ -205,6 +281,141 @@ namespace sjson
 */
 
 namespace sjson {
+
+    // by default, all conversion funcs throw invalid
+    // there's probably a way to make this more extensible with templates
+    // also shorter
+
+    //==================================================
+    Node::real Node::MultiTypeBase::as_real() const {
+        throw Node::coercion_invalid();
+    }
+    Node::real& Node::MultiTypeBase::as_real_mut() {
+        throw Node::wrong_type();
+    }
+
+    //==================================================
+    Node::integer Node::MultiTypeBase::as_int() const {
+        throw Node::coercion_invalid();
+    }
+    Node::integer& Node::MultiTypeBase::as_int_mut() {
+        throw Node::wrong_type();
+    }
+
+    //==================================================
+    Node::string Node::MultiTypeBase::as_string() const {
+        throw coercion_invalid();
+    }
+    Node::string& Node::MultiTypeBase::as_string_mut() {
+        throw wrong_type();
+    }
+    const Node::string& Node::MultiTypeBase::as_string_reference() {
+        throw wrong_type();
+    }
+
+    //==================================================
+    Node::array Node::MultiTypeBase::as_array() const {
+        throw coercion_invalid();
+    }
+    Node::array& Node::MultiTypeBase::as_array_mut() {
+        throw wrong_type();
+    }
+    const Node::array& Node::MultiTypeBase::as_array_reference() const {
+        throw wrong_type();
+    }
+
+    //==================================================
+    Node::object Node::MultiTypeBase::as_object() const {
+        throw coercion_invalid();
+    }
+    Node::object& Node::MultiTypeBase::as_object_mut() {
+        throw wrong_type();
+    }
+    const Node::object& Node::MultiTypeBase::as_object_reference() const {
+        throw wrong_type();
+    }
+
+    //= INTEGER ==========================================
+    Node::integer Node::MInt::as_int() const {
+        return value;
+    }
+    Node::integer& Node::MInt::as_int_mut() {
+        return value;
+    }
+    Node::real Node::MInt::as_real() const {
+        return static_cast<real>(value);
+    }
+    Node::string Node::MInt::as_string() const {
+        return std::to_string(value);
+    }
+    Node::array Node::MInt::as_array() const {
+        return {value};
+    }
+    //= REAL =============================================
+    Node::real Node::MReal::as_real() const {
+        return value;
+    }
+    Node::real& Node::MReal::as_real_mut() {
+        return value;
+    }
+    Node::integer Node::MReal::as_int() const {
+        return static_cast<integer>(value);
+    }
+    Node::string Node::MReal::as_string() const {
+        return std::to_string(value);
+    }
+    Node::array Node::MReal::as_array() const {
+        return {value};
+    }
+    //= STRING ===========================================
+    Node::string Node::MString::as_string() const {
+        return value;
+    }
+    Node::string& Node::MString::as_string_mut() {
+        return value;
+    }
+    const Node::string& Node::MString::as_string_reference() {
+        return value;
+    }
+
+    Node::integer Node::MString::as_int() const {
+        try {
+            return std::stol(value);
+        }
+        catch(std::invalid_argument& e) {
+            throw coercion_invalid();
+        }
+    }
+    Node::real Node::MString::as_real() const {
+        try {
+            return std::stof(value);
+        }
+        catch (std::invalid_argument& e) {
+            throw coercion_invalid();
+        }
+    }
+    //= ARRAY ============================================
+    Node::array Node::MArray::as_array() const {
+        return value;
+    }
+    Node::array& Node::MArray::as_array_mut() {
+        return value;
+    }
+    const Node::array& Node::MArray::as_array_reference() const {
+        return value;
+    }
+
+    //todo: tostring
+    //= OBJECT ===========================================
+    Node::object Node::MObject::as_object() const {
+        return value;
+    }
+    Node::object& Node::MObject::as_object_mut() {
+        return value;
+    }
+    const Node::object& Node::MObject::as_object_reference() const {
+        return value;
+    }
 
     #define USE_SUBCLASS(CLASS,MEMBER_CLASS) typedef CLASS::MEMBER_CLASS MEMBER_CLASS
 
@@ -895,7 +1106,9 @@ namespace sjson {
                         return root;
                     }
                     else {
-                        DEBUG_PRINT("STACK NOT EMPTY!!!");
+                        DEBUG_PRINT( __LINE__ << ": STACK NOT EMPTY!!!" );
+                        assert(false);
+                        return root;
                     }
                 }
 
