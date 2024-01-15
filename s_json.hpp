@@ -45,7 +45,8 @@ namespace sjson
             static Node parse_from_string(std::string);
             static Node parse_from_string(const char*);
 
-            void write_as_json(std::ostream&);
+            void write_as_json(std::ostream&) const;
+            string as_json_string() const;
 
             //todo: messagepack
 
@@ -109,6 +110,7 @@ namespace sjson
 
             // more troublesome, but saves on memory
             // which is important for huge json files
+            // // maybe replace this with something involving virtual classes
             union {
                 array* varray;
                 object* vobject;
@@ -139,6 +141,27 @@ namespace sjson
 #else
 #define DEBUG_PRINT(X)
 #endif
+
+    static constexpr char QUOTE_OPEN = '"';
+    static constexpr char QUOTE_CLOSE = '"';
+
+    static constexpr char OBJECT_OPEN = '{';
+    static constexpr char OBJECT_CLOSE = '}';
+
+    static constexpr char ARRAY_OPEN = '[';
+    static constexpr char ARRAY_CLOSE = ']';
+
+    static constexpr char ESCAPE = '\\';
+
+    static constexpr char NAME_SPECIFIER = ':';
+    static constexpr char END_PHRASE = ',';
+
+    static constexpr char DECIMAL = '.';
+    static constexpr char SCIENTIFIC_NOTATION_LOWER = 'e';
+    static constexpr char SCIENTIFIC_NOTATION_UPPPER = 'E';
+    static constexpr char POSITIVE = '+';
+    static constexpr char NEGATIVE = '-';
+    static constexpr char JSON_NULL[] = "null";
 
 /*
 
@@ -410,14 +433,14 @@ namespace sjson {
     }
 
     Node::object& Node::as_object_mut() {
-        if (base_type != ARRAY) {
+        if (base_type != OBJECT) {
             throw wrong_type();
         }
         return *variant.vobject;
     }
 
     const Node::object& Node::as_object_reference() const {
-        if (base_type != ARRAY) {
+        if (base_type != OBJECT) {
             throw wrong_type();
         }
         return *variant.vobject;
@@ -535,20 +558,27 @@ namespace sjson {
 
         case ARRAY:
             {
-                int line_number = 0;
+                stream << ARRAY_OPEN << '\n';
+
+                unsigned int line_number = 0;
                 const Node::array& ref = node.as_array_reference();
                 for (const Node& c : ref) {
-                    write_as_json_recurse(node, layer + 1, stream);
+                    write_as_json_recurse(c, layer + 1, stream);
 
                     if ( (line_number++) < ref.size() ) stream << END_PHRASE << '\n';
                     else stream << '\n';
                     
                 }
+
+                stream << std::string( layer, '\t' ) << ARRAY_CLOSE;
+
             }
+            break;
 
         case OBJECT:
             {
-                int line_number = 0;
+                stream << OBJECT_OPEN << '\n';
+                unsigned int line_number = 0;
                 const Node::object& ref = node.as_object_reference();
 
                 for (const auto& pair : ref) {
@@ -556,6 +586,7 @@ namespace sjson {
                     if ( (line_number++) < ref.size() ) stream << ",\n";
                     else stream << '\n';
                 }
+                stream << std::string( layer, '\t' ) << OBJECT_CLOSE;
             }
 
         default:
@@ -563,8 +594,14 @@ namespace sjson {
         }
     }
 
-    void Node::write_as_json(std::ostream&) {
+    void Node::write_as_json(std::ostream& stream) const {
+        write_as_json_recurse(*this, 0, stream);
+    }
 
+    Node::string Node::as_json_string() const {
+        std::stringstream stream("");
+        write_as_json(stream);
+        return stream.str();
     }
 
     bool case_insensitive_equals(const char& c1, const char& c2) {
@@ -581,26 +618,7 @@ namespace sjson {
         return true;
     }
 
-    static constexpr char QUOTE_OPEN = '"';
-    static constexpr char QUOTE_CLOSE = '"';
-
-    static constexpr char OBJECT_OPEN = '{';
-    static constexpr char OBJECT_CLOSE = '}';
-
-    static constexpr char ARRAY_OPEN = '[';
-    static constexpr char ARRAY_CLOSE = ']';
-
-    static constexpr char ESCAPE = '\\';
-
-    static constexpr char NAME_SPECIFIER = ':';
-    static constexpr char END_PHRASE = ',';
-
-    static constexpr char DECIMAL = '.';
-    static constexpr char SCIENTIFIC_NOTATION_LOWER = 'e';
-    static constexpr char SCIENTIFIC_NOTATION_UPPPER = 'E';
-    static constexpr char POSITIVE = '+';
-    static constexpr char NEGATIVE = '-';
-    static constexpr char JSON_NULL[] = "null";
+    
 
     bool json_is_numeric_char(const char& c) {
         switch (c)
@@ -663,7 +681,13 @@ namespace sjson {
     }
 
     Node parse_str_to_node(const std::string& str) {
+        NodeType type = detect_node_type_str(str);
         Node a(str);
+        if (type == STRING) {
+            a.as_string_mut() = a.as_string_reference().substr(1);
+            return a;
+        }
+        
         try {
             a.set_type(detect_node_type_str(str));
         }
@@ -837,6 +861,7 @@ namespace sjson {
                     else {
                         Node derived = parse_str_to_node(token);
                         last_data_token = derived;
+                        token_assigned = true;
                     }
                     
 
@@ -884,12 +909,23 @@ namespace sjson {
                 }
 
                 void commit_token() {
-
+                    DEBUG_PRINT("committing");
                     append_data_node(last_data_token, get_label());
-
+                    last_data_token = Node(); // clear data token
+                    token_assigned = false;
                 }
 
                 void pop() {
+                    
+                    // if there's a token waiting
+                    if (token_assigned) {
+                        commit_token();
+                    }
+                    else {
+                        #if !JSON_ALLOW_TRAILING_COMMA
+                            throw Node::json_invalid;
+                        #endif
+                    }
 
                     Node::string popped_label = "";
                     Node node = nesting.top(); nesting.pop();
@@ -931,9 +967,8 @@ namespace sjson {
                 }
 
                 Node last_data_token;
+                bool token_assigned = false;
 
-                // problem: we dont really have a way to differentiate if a label
-                // has actually been assigned
                 Node::string label = "";
                 bool label_assigned = false;
 
@@ -941,6 +976,7 @@ namespace sjson {
 
                 std::stack<Node::string> label_stack;
         };
+
 
         ParseHelper helper;
 
@@ -986,6 +1022,26 @@ TEST(multitype, create_and_equivocate) {
     Node::array res = d.as_array();
     ASSERT_EQ(res[0].as_int(), 10);
     ASSERT_EQ(res[1].as_string(), "String");
+}
+
+TEST(multitype, to_json) {
+    const Node::array node_array = {Node("my string"), Node((Node::integer)2)};
+    const Node array_node(node_array);
+    const Node::string test_str = "this is a string";
+    const Node::integer test_number = 64;
+    const Node::real test_real = 33.2;
+
+    const Node obj_node = Node((Node::object)
+        {
+            {"my_array", Node(node_array)}, 
+            {"my_string", Node(test_str)},
+            {"my_real" , Node(test_real)},
+            {"my_int", Node(test_number)}
+        });
+
+    std::string as_json = obj_node.as_json_string();
+
+    DEBUG_PRINT('\n' << as_json);
 }
 
 /*
@@ -1098,7 +1154,7 @@ TEST(json_parser, type_detection) {
 TEST(json_parser, string_translation) {
     {
         const std::string str = "\"string or ... something";
-        EXPECT_EQ(sjson::parse_str_to_node(str).as_string(), str);
+        EXPECT_EQ(sjson::parse_str_to_node(str).as_string(), str.substr(1));
     }
     {
         const std::string str = "262.848";
@@ -1139,6 +1195,7 @@ TEST(json_parser, basic_file) {
     std::istream& stream = stream_proto;
     
     Node parsed = sjson::Node::parse_from_istream(stream);
+    DEBUG_PRINT("PARSE RESULT:\n" << parsed.as_json_string());
 
     ASSERT_EQ(parsed.get_type(), sjson::OBJECT);
     ASSERT_TRUE(parsed.as_object().count("basic") > 0);
@@ -1146,6 +1203,14 @@ TEST(json_parser, basic_file) {
     EXPECT_EQ(basic.get_type(), sjson::INTEGER);
     EXPECT_EQ(basic.as_int(), 123);
 
+}
+
+#include <fstream>
+// this crashes, todo
+TEST(json_parser, all_types) {
+    std::ifstream stream("tests/all_types.json");
+    Node parsed = sjson::Node::parse_from_istream(stream);
+    DEBUG_PRINT("PARSE RESULT:\n" << parsed.as_json_string());
 }
 
 int main() {
