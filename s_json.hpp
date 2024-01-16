@@ -35,6 +35,8 @@ namespace sjson
             typedef std::vector<Node> array;
             typedef double real;
             typedef long int integer;
+            typedef unsigned long int uinteger;
+            typedef bool boolean;
 
             class coercion_invalid:std::exception {};
             class wrong_type : std::exception {};
@@ -99,7 +101,8 @@ namespace sjson
             NodeType base_type = NONE;
             bool number_is_integer = false;
 
-            // in progress: better way of doing this than using union
+            // Todo: bool, signedness
+            // signedness is only relevant to messagepack
             class MultiTypeBase {
                 public:
                     // needed for frees
@@ -255,6 +258,7 @@ namespace sjson
 
 #ifdef SJSON_TEST
 #include <iostream>
+#include <stdint.h>
 #define DEBUG_PRINT(X) std::cerr << "[----------] " << X << '\n'
 #else
 #define DEBUG_PRINT(X)
@@ -1205,7 +1209,145 @@ namespace sjson {
     
         =============================================
     */
+
     namespace messagepack {
+        /*
+            Types:
+                Integer
+                Nil
+                Bool
+                Float
+                Raw (byte stream)
+                Array
+                Map
+        */
+       typedef uint8_t Byte;
+
+       namespace Types
+       {
+            template <typename U, typename L, typename V>
+            bool between_values_inclusive(const L& lower, const U& upper, const V& value) {
+                return value >= lower && value <= upper;
+            }
+
+            bool positive_fixint(Byte b) {
+                return between_values_inclusive(0,0x7f,b);
+            }
+
+            bool fixmap(Byte b) {
+                return between_values_inclusive(0x80,0x8f,b);
+            }
+
+            bool fixarray(Byte b) {
+                return between_values_inclusive(0x90,0x9f,b);
+            }
+
+            bool fixstring(Byte b) {
+                return between_values_inclusive(0xa0,0xbf,b);
+            }
+
+            bool negative_fixint(Byte b) {
+                return between_values_inclusive(0xe0,0xff,b);
+            }
+
+            enum TYPES : Byte {
+                NIL = 0xc0,
+
+                UNUSED,
+
+                FALSE,
+                TRUE,
+
+                BIN_8,
+                BIN_16,
+                BIN_32,
+
+                EXT_8,
+                EXT_16,
+                EXT_32,
+
+                FLOAT_32,
+                FLOAT_64,
+
+                UINT_8,
+                UINT_16,
+                UINT_32,
+                UINT_64,
+
+                INT_8,
+                INT_16,
+                INT_32,
+                INT_64,
+
+                FIXEXT_1,
+                FIXEXT_2,
+                FIXEXT_4,
+                FIXEXT_8,
+                FIXEXT_16,
+
+                STR_8,
+                STR_16,
+                STR_32,
+                
+                ARRAY_16,
+                ARRAY_32,
+                
+                MAP_16,
+                MAP_32,
+            };
+            
+            //todo: look up how to parse big endian data
+            
+       } // namespace Types
+       
+       namespace parser {
+
+            typedef Node::integer integer;
+
+            integer parse_fixint(const Byte& number) {
+                return number & 0b1111111;
+            }
+
+            integer parse_negative_fixint(const Byte& number) {
+                // recast to get signedness
+                return *(int8_t*)&number;
+            }
+
+            uint8_t parse_uint_8(const Byte& number) {
+                // dont need to do anything
+                return number;
+            }
+            int8_t parse_int_8(const Byte& number) {
+                return *(int8_t*)&number;
+            }
+
+            uint16_t parse_uint_16(const Byte number[2]) {
+                return (number[0] << 8) | number[1];
+            }
+            int16_t parse_int_16(const Byte number[2]) {
+                uint16_t v = parse_uint_16(number);
+                return *(int16_t*)&v;
+            }
+
+            uint32_t parse_uint_32(const Byte number[4]) {
+                return (number[0] << 24) | (number[1] << 16) | (number[2] << 8) | (number[3]) ;
+            }
+            int32_t parse_int_32(const Byte number[4]) {
+                int32_t v = parse_uint_32(number);
+                return *(int32_t*)&v;
+            }
+
+            uint64_t parse_uint_64(const Byte number[8]) {
+                return 
+                ((uint64_t)number[0] << 56) | ((uint64_t)number[1] << 48) | ((uint64_t)number[2] << 40) | ((uint64_t)number[3] << 32) |
+                (number[4] << 24) | (number[5] << 16) | (number[6] << 8) | (number[7]) ;
+            }
+            int64_t parse_int_64(const Byte number[8]) {
+                int64_t v = parse_uint_64(number);
+                return *(int64_t*)&v;
+            }
+
+        }
 
     } // end of namespace messagepack
 
@@ -1219,7 +1361,63 @@ namespace sjson {
 
 #include <gtest/gtest.h>
 using sjson::Node;
+TEST(messagepack, parse_big_endian) {
+    {
+        const uint8_t test_v = 0x4F;
+        const uint8_t actual = sjson::messagepack::parser::parse_uint_8(test_v);
+        EXPECT_EQ(test_v, actual);
+    }
+    {
+        const sjson::messagepack::Byte test_v[] = {0x4F, 0x5F};
+        const uint16_t expected_v = 0x4F5F;
 
+        const auto actual = sjson::messagepack::parser::parse_uint_16(test_v);
+        EXPECT_EQ(expected_v, actual);
+    }
+    {
+        const sjson::messagepack::Byte test_v[] = {0x4F, 0x5F, 0x6F, 0x7F};
+        const uint32_t expected_v = 0x4F5F6F7F;
+
+        const auto actual = sjson::messagepack::parser::parse_uint_32(test_v);
+        EXPECT_EQ(expected_v, actual);
+    }
+    {
+        const sjson::messagepack::Byte test_v[] = {0x1F, 0x2F, 0x3F, 0x4F, 0x5F, 0x6F, 0x7F, 0x8F};
+        const uint64_t expected_v = 0x1f2f3f4f5f6f7f8f;
+
+        const auto actual = sjson::messagepack::parser::parse_uint_64(test_v);
+        EXPECT_EQ(expected_v, actual);
+    }
+
+    {
+        const sjson::messagepack::Byte test_v = 0xFC;
+        const int8_t expected_v = -4;
+
+        const auto actual = sjson::messagepack::parser::parse_int_8(test_v);
+        EXPECT_EQ(expected_v, actual);
+    }
+    {
+        const sjson::messagepack::Byte test_v[] = {0xF1, 0xf2};
+        const int16_t expected_v = -3598;
+
+        const auto actual = sjson::messagepack::parser::parse_int_16(test_v);
+        EXPECT_EQ(expected_v, actual);
+    }
+    {
+        const sjson::messagepack::Byte test_v[] = {0xF1, 0xf2,0xF3,0xF4};
+        const int32_t expected_v = -235736076;
+
+        const auto actual = sjson::messagepack::parser::parse_int_32(test_v);
+        EXPECT_EQ(expected_v, actual);
+    }
+    {
+        const sjson::messagepack::Byte test_v[] = {0xFF,0xFF,0xFF,0xFF, 0xF1,0xf2,0xF3,0xF4};
+        const int64_t expected_v = -235736076;
+
+        const auto actual = sjson::messagepack::parser::parse_int_64(test_v);
+        EXPECT_EQ(expected_v, actual);
+    }
+}
 TEST(multitype, create_and_equivocate) {
     Node a((long int)10);
     ASSERT_EQ(a.as_int(), 10);
@@ -1431,6 +1629,7 @@ TEST(json_parser, all_types) {
 }
 
 int main() {
+
     testing::InitGoogleTest();
     return RUN_ALL_TESTS();
 }
