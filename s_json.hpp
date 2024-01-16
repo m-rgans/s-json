@@ -38,17 +38,6 @@ namespace sjson
 
             class coercion_invalid:std::exception {};
             class wrong_type : std::exception {};
-            class json_invalid:std::exception {};
-
-
-            // Parse from json
-            static Node parse_from_istream(std::istream&);
-            static Node from_file_path(std::string);
-            static Node parse_from_string(std::string);
-            static Node parse_from_string(const char*);
-
-            void write_as_json(std::ostream&) const;
-            string as_json_string() const;
 
             //todo: messagepack
 
@@ -241,6 +230,17 @@ namespace sjson
         class duplicate_label : public json_invalid {};
         class label_in_array: public json_invalid{};
         class missing_definition: public json_invalid{};
+
+        Node parse_from_istream(std::istream&);
+        Node from_file_path(std::string);
+        Node parse_from_string(std::string);
+        Node parse_from_string(const char*);
+
+        void write_node_to_file(const Node& node, const std::string& path);
+    }
+
+    namespace messagepack {
+        Node parse_from_istream(std::istream&);
     }
 
 } // namespace sjson
@@ -259,26 +259,7 @@ namespace sjson
 #define DEBUG_PRINT(X)
 #endif
 
-    static constexpr char QUOTE_OPEN = '"';
-    static constexpr char QUOTE_CLOSE = '"';
-
-    static constexpr char OBJECT_OPEN = '{';
-    static constexpr char OBJECT_CLOSE = '}';
-
-    static constexpr char ARRAY_OPEN = '[';
-    static constexpr char ARRAY_CLOSE = ']';
-
-    static constexpr char ESCAPE = '\\';
-
-    static constexpr char NAME_SPECIFIER = ':';
-    static constexpr char END_PHRASE = ',';
-
-    static constexpr char DECIMAL = '.';
-    static constexpr char SCIENTIFIC_NOTATION_LOWER = 'e';
-    static constexpr char SCIENTIFIC_NOTATION_UPPPER = 'E';
-    static constexpr char POSITIVE = '+';
-    static constexpr char NEGATIVE = '-';
-    static constexpr char JSON_NULL[] = "null";
+    
 
 /*
 
@@ -653,7 +634,53 @@ namespace sjson {
     }
 
     //todo: test this
-    void write_as_json_recurse(const Node& node, int layer, std::ostream& stream, bool has_label = false, std::string label = "") {
+    
+
+    bool case_insensitive_equals(const char& c1, const char& c2) {
+        return std::tolower(static_cast<unsigned char>(c1)) == std::tolower(static_cast<unsigned char>(c2));
+    }
+
+    bool case_insensitive_equals(const std::string& s1, const std::string& s2) {
+        if (s1.length() != s2.length()) return false;
+
+        for (unsigned i = 0; i < s1.length(); i++) {
+            if (!case_insensitive_equals(s1[i], s2[1])) return false;
+        }
+
+        return true;
+    }
+
+    /*
+        =============================================
+
+                    JSON SECTION
+    
+        =============================================
+    */
+    namespace json {
+
+        static constexpr char QUOTE_OPEN = '"';
+        static constexpr char QUOTE_CLOSE = '"';
+
+        static constexpr char OBJECT_OPEN = '{';
+        static constexpr char OBJECT_CLOSE = '}';
+
+        static constexpr char ARRAY_OPEN = '[';
+        static constexpr char ARRAY_CLOSE = ']';
+
+        static constexpr char ESCAPE = '\\';
+
+        static constexpr char NAME_SPECIFIER = ':';
+        static constexpr char END_PHRASE = ',';
+
+        static constexpr char DECIMAL = '.';
+        static constexpr char SCIENTIFIC_NOTATION_LOWER = 'e';
+        static constexpr char SCIENTIFIC_NOTATION_UPPPER = 'E';
+        static constexpr char POSITIVE = '+';
+        static constexpr char NEGATIVE = '-';
+        static constexpr char JSON_NULL[] = "null";
+
+        void write_as_json_recurse(const Node& node, int layer, std::ostream& stream, bool has_label = false, std::string label = "") {
 
         stream << std::string( layer, '\t' );
 
@@ -717,457 +744,453 @@ namespace sjson {
         }
     }
 
-    void Node::write_as_json(std::ostream& stream) const {
-        write_as_json_recurse(*this, 0, stream);
+    void write_node_as_json(const Node& node, std::ostream& stream) {
+        write_as_json_recurse(node, 0, stream);
     }
 
-    Node::string Node::as_json_string() const {
+    Node::string node_to_json_string(const Node& n) {
         std::stringstream stream("");
-        write_as_json(stream);
+        write_node_as_json(n,stream);
         return stream.str();
     }
 
-    bool case_insensitive_equals(const char& c1, const char& c2) {
-        return std::tolower(static_cast<unsigned char>(c1)) == std::tolower(static_cast<unsigned char>(c2));
-    }
+        bool json_is_numeric_char(const char& c) {
+            switch (c)
+            {
+            case DECIMAL:
+            case POSITIVE:
+            case NEGATIVE:
+            case SCIENTIFIC_NOTATION_LOWER:
+            case SCIENTIFIC_NOTATION_UPPPER:
 
-    bool case_insensitive_equals(const std::string& s1, const std::string& s2) {
-        if (s1.length() != s2.length()) return false;
+                return true;
+            
+            default:
+                return std::isdigit( (unsigned char) c );
+                break;
+            }
 
-        for (unsigned i = 0; i < s1.length(); i++) {
-            if (!case_insensitive_equals(s1[i], s2[1])) return false;
+            return false;
         }
 
-        return true;
-    }
+        // NOTE: just because the string contents are detected as a certain type,
+        // does NOT necessarily mean its valid as that type.
+        // expects the format of the tokenizer (leading quotes included)
+        NodeType detect_node_type_str(const std::string& str) {
+            
+            if (case_insensitive_equals(JSON_NULL, str)) {
+                return NONE;
+            }
 
-    
+            const char first_char = str[0];
+            if (first_char == '"') {
+                return STRING;
+            }
+            else if (first_char == '{') {
+                return OBJECT;
+            }
+            else if (first_char == '[') {
+                return ARRAY;
+            }
+            // try numeric
+            else {
+                bool has_decimal = false;
+                for (const char& c : str) {
+                    if (json_is_numeric_char(c)) {
+                        if (c == '.') {
+                            has_decimal = true;
+                        }
+                    }
+                    else {
+                        // I don't know of any other way to break out of this if branch
+                        DEBUG_PRINT("Non numeric character (" << c << "), interpreting as string.");
+                        goto NON_NUMERIC;
+                    }
+                }
+                return (has_decimal)? REAL:INTEGER;
+            }
+            NON_NUMERIC:
 
-    bool json_is_numeric_char(const char& c) {
-        switch (c)
-        {
-        case DECIMAL:
-        case POSITIVE:
-        case NEGATIVE:
-        case SCIENTIFIC_NOTATION_LOWER:
-        case SCIENTIFIC_NOTATION_UPPPER:
-
-            return true;
-        
-        default:
-            return std::isdigit( (unsigned char) c );
-            break;
-        }
-
-        return false;
-    }
-
-    // NOTE: just because the string contents are detected as a certain type,
-    // does NOT necessarily mean its valid as that type.
-    // expects the format of the tokenizer (leading quotes included)
-    NodeType detect_node_type_str(const std::string& str) {
-        
-        if (case_insensitive_equals(JSON_NULL, str)) {
             return NONE;
         }
 
-        const char first_char = str[0];
-        if (first_char == '"') {
-            return STRING;
-        }
-        else if (first_char == '{') {
-            return OBJECT;
-        }
-        else if (first_char == '[') {
-            return ARRAY;
-        }
-        // try numeric
-        else {
-            bool has_decimal = false;
-            for (const char& c : str) {
-                if (json_is_numeric_char(c)) {
-                    if (c == '.') {
-                        has_decimal = true;
-                    }
-                }
-                else {
-                    // I don't know of any other way to break out of this if branch
-                    DEBUG_PRINT("Non numeric character (" << c << "), interpreting as string.");
-                    goto NON_NUMERIC;
-                }
+        Node parse_str_to_node(const std::string& str) {
+            NodeType type = detect_node_type_str(str);
+            Node a(str);
+            if (type == STRING) {
+                a.as_string_mut() = a.as_string_reference().substr(1);
+                return a;
             }
-            return (has_decimal)? REAL:INTEGER;
-        }
-        NON_NUMERIC:
-
-        return NONE;
-    }
-
-    Node parse_str_to_node(const std::string& str) {
-        NodeType type = detect_node_type_str(str);
-        Node a(str);
-        if (type == STRING) {
-            a.as_string_mut() = a.as_string_reference().substr(1);
+            
+            try {
+                a.set_type(detect_node_type_str(str));
+            }
+            catch (Node::coercion_invalid& e) {
+                // should throw or something.
+                // just interperet as an str for now
+            }
+            
             return a;
         }
-        
-        try {
-            a.set_type(detect_node_type_str(str));
-        }
-        catch (Node::coercion_invalid& e) {
-            // should throw or something.
-            // just interperet as an str for now
-        }
-        
-        return a;
-    }
 
-    char escape_to_raw(const char& code) {
-        switch (code)
-        {
-        case 'b':
-            return '\b';
-        case 'f':
-            return '\f';
-        case 'n':
-            return '\n';
-        case 'r':
-            return '\r';
-        case 't':
-            return '\t';
-        case '"':
-            return '"';
-        case '\\':
-            return '\\';
-        default:
-            return '?';
-            break;
+        char escape_to_raw(const char& code) {
+            switch (code)
+            {
+            case 'b':
+                return '\b';
+            case 'f':
+                return '\f';
+            case 'n':
+                return '\n';
+            case 'r':
+                return '\r';
+            case 't':
+                return '\t';
+            case '"':
+                return '"';
+            case '\\':
+                return '\\';
+            default:
+                return '?';
+                break;
+            }
+
+            //shouldnt happen
+            return '#';
         }
 
-        //shouldnt happen
-        return '#';
-    }
+        // This function does not include
+        // trailing quotes in the string it returns.
+        // First is left in for signaling purposes
 
-    // This function does not include
-    // trailing quotes in the string it returns.
-    // First is left in for signaling purposes
-
-    bool json_is_delimeter(const char& c) {
-        switch (c)
-        {
-        case OBJECT_OPEN:
-        case OBJECT_CLOSE:
-        case ARRAY_OPEN:
-        case ARRAY_CLOSE:
-        case NAME_SPECIFIER:
-        case END_PHRASE:
-            return true;
-            break;
-        default:
-            return false;
-        }
-    }
-
-    std::string get_next_json_token(std::istream& stream) {
-        
-        if (stream.eof()) {
-            return "";
+        bool json_is_delimeter(const char& c) {
+            switch (c)
+            {
+            case OBJECT_OPEN:
+            case OBJECT_CLOSE:
+            case ARRAY_OPEN:
+            case ARRAY_CLOSE:
+            case NAME_SPECIFIER:
+            case END_PHRASE:
+                return true;
+                break;
+            default:
+                return false;
+            }
         }
 
-        bool string = false;
-        bool escaped = false;
+        std::string get_next_json_token(std::istream& stream) {
+            
+            if (stream.eof()) {
+                return "";
+            }
 
-        std::stringstream collect;
+            bool string = false;
+            bool escaped = false;
 
-        char c = stream.get();
+            std::stringstream collect;
 
-        //get to next meaningful value
-        while (isspace(c)) {stream.get(c);}
+            char c = stream.get();
 
-        if (json_is_delimeter(c)) return std::string(1,c);
-        if (c == QUOTE_OPEN) {string = true;}
+            //get to next meaningful value
+            while (isspace(c)) {stream.get(c);}
 
-        collect << c;
+            if (json_is_delimeter(c)) return std::string(1,c);
+            if (c == QUOTE_OPEN) {string = true;}
 
-        while (stream.get(c))
-        {
-            if (string) {
-                if (escaped) {
-                    collect << escape_to_raw(c);
-                    continue;
+            collect << c;
+
+            while (stream.get(c))
+            {
+                if (string) {
+                    if (escaped) {
+                        collect << escape_to_raw(c);
+                        continue;
+                    }
+                    else if (c == ESCAPE) {
+                        escaped = true;
+                        continue;
+                    }
+                    else if (c == QUOTE_CLOSE) {
+                        break;
+                    }
+                    else {
+                        collect << c;
+                    }
                 }
-                else if (c == ESCAPE) {
-                    escaped = true;
-                    continue;
-                }
-                else if (c == QUOTE_CLOSE) {
-                    break;
-                }
+                // build until space
                 else {
+                    if (isspace(c)) break;
+                    if (json_is_delimeter(c)) {
+                        stream.putback(c);
+                        break;
+                    }
                     collect << c;
                 }
             }
-            // build until space
-            else {
-                if (isspace(c)) break;
-                if (json_is_delimeter(c)) {
-                    stream.putback(c);
-                    break;
-                }
-                collect << c;
-            }
+            return collect.str();
         }
-        return collect.str();
-    }
 
-    Node Node::parse_from_istream(std::istream& stream) {
+        Node parse_from_istream(std::istream& stream) {
 
-        class ParseHelper {
-            public:
-                void parse_token(const std::string& token) {
+            class ParseHelper {
+                public:
+                    void parse_token(const std::string& token) {
 
-                    DEBUG_PRINT("Token: " << token);
+                        DEBUG_PRINT("Token: " << token);
 
-                    if (token.length() == 1) {
-                        const char c = token[0];
+                        if (token.length() == 1) {
+                            const char c = token[0];
 
-                        switch (c)
-                        {
-                        case OBJECT_OPEN:
-                            push_object();
-                            return;
-                        case OBJECT_CLOSE:
-                            if (!top_is_object()) throw json::wrong_closer();
-                            pop();
-                            return;
+                            switch (c)
+                            {
+                            case OBJECT_OPEN:
+                                push_object();
+                                return;
+                            case OBJECT_CLOSE:
+                                if (!top_is_object()) throw json::wrong_closer();
+                                pop();
+                                return;
+                            
+                            case ARRAY_OPEN:
+                                push_array();
+                                return;
+                            case ARRAY_CLOSE:
+                                if (!top_is_array()) throw json::wrong_closer();
+                                pop();
+                                return;
+
+                            case NAME_SPECIFIER:
+                                current.set_label_as_node();
+                                return;
+                            
+                            case END_PHRASE:
+                                append_to_top(current);
+                                current = StatementBuilder();
+                                return;
+
+                            default:
+                                break;
+                            }
+                        }
                         
-                        case ARRAY_OPEN:
-                            push_array();
-                            return;
-                        case ARRAY_CLOSE:
-                            if (!top_is_array()) throw json::wrong_closer();
-                            pop();
-                            return;
+                        // must be definition
+                        if (current.is_node_assigned()) {
+                            throw json::missing_delimeter();
+                        }
 
-                        case NAME_SPECIFIER:
-                            current.set_label_as_node();
-                            return;
+
+                        Node derived = parse_str_to_node(token);
+                        current.set_node(derived);
                         
-                        case END_PHRASE:
+                    }
+
+                    bool done() const {
+                        return _done;
+                    }
+
+                    Node get_root() const {
+                        if (done()) {
+                            return root;
+                        }
+                        else {
+                            DEBUG_PRINT( __LINE__ << ": STACK NOT EMPTY!!!" );
+                            assert(false);
+                            return root;
+                        }
+                    }
+
+                private:
+
+                    // Class represents partial statements
+                    class StatementBuilder {
+                        public:
+
+                            class no_label : public std::exception {};
+                            class no_token : public std::exception {};
+
+                            bool is_label_assigned() const {
+                                return label_assigned;
+                            }
+                            void set_label(const Node::string base) {
+                                label = base;
+                                label_assigned = true;
+                            }
+                            const Node::string& get_label() const {
+                                if (label_assigned) {
+                                    return label;
+                                }
+                                else {
+                                    throw no_label();
+                                }
+                            }
+
+                            bool is_node_assigned() const {
+                                return token_assigned;
+                            }
+                            void set_node(const Node base) {
+                                token = base;
+                                token_assigned = true;
+                            }
+                            Node& get_node_mut() {
+                                if (token_assigned) {
+                                    return token;
+                                }
+                                else {
+                                    throw no_token();
+                                }
+                            }
+                            const Node& get_node() const {
+                                if (token_assigned) {
+                                    return token;
+                                }
+                                else {
+                                    throw no_token();
+                                }
+                            }
+
+                            void set_label_as_node() {
+                                if (token.get_type() == STRING) {
+                                    set_label(token.as_string_reference());
+                                    token = Node();
+                                    token_assigned = false;
+                                }
+                                else {
+                                    //throw
+                                }
+                            }
+                        private:
+                            Node::string label;
+                            bool label_assigned = false;
+
+                            Node token;
+                            bool token_assigned = false;
+                    };
+
+                    bool top_is_array() {
+                        return top_type() == ARRAY;
+                    }
+
+                    bool top_is_object() {
+                        return top_type() == OBJECT;
+                    }
+
+                    void push_array() {
+                        Node dummy = Node(Node::array());
+                        current.set_node(dummy);
+                        push_current();
+                    }
+
+                    void push_object() {
+                        Node dummy = Node(Node::object());
+                        current.set_node(dummy);
+                        push_current();
+                    }
+
+                    void push_current() {
+                        nest_stack.push(current);
+                        current = StatementBuilder();
+                    }
+
+                    void pop() {
+                        if (current.is_node_assigned()) {
                             append_to_top(current);
-                            current = StatementBuilder();
+                        }
+                        #if !JSON_ALLOW_TRAILING_COMMA
+                        else {
+                            throw json::trailing_comma();
+                        }
+                        #endif
+                        StatementBuilder popped = top();
+                        nest_stack.pop();
+                        if (nest_stack.size() == 0) {
+                            root = popped.get_node();
+                            _done = true;
                             return;
+                        }
+                        else {
+                            current = popped;
+                        }
+                        
+                        //append_to_top(popped);
+                    }
 
-                        default:
-                            break;
+                    void append_to_top(const StatementBuilder& st) {
+                        if (top_is_object()) {
+                            try {
+                                const Node::string label = st.get_label();
+                                Node::object& map = top_mut().get_node_mut().as_object_mut();
+                                if (map.count(label) > 0) throw json::duplicate_label();
+                                map[label] = st.get_node();
+                            }
+                            catch (StatementBuilder::no_label& e) {
+                                throw json::missing_label();
+                            }
+                        }
+                        else if (top_is_array()) {
+                            if (st.is_label_assigned()) {
+                                throw json::label_in_array();
+                            }
+                            try {
+                                Node::array& array = top_mut().get_node_mut().as_array_mut();
+                                array.push_back(st.get_node());
+                            }
+                            catch (StatementBuilder::no_token& e) {
+                                throw json::missing_definition();
+                            }
                         }
                     }
                     
-                    // must be definition
-                    if (current.is_node_assigned()) {
-                        throw json::missing_delimeter();
-                    }
-
-
-                    Node derived = parse_str_to_node(token);
-                    current.set_node(derived);
-                    
-                }
-
-                bool done() const {
-                    return _done;
-                }
-
-                Node get_root() const {
-                    if (done()) {
-                        return root;
-                    }
-                    else {
-                        DEBUG_PRINT( __LINE__ << ": STACK NOT EMPTY!!!" );
-                        assert(false);
-                        return root;
-                    }
-                }
-
-            private:
-
-                // Class represents partial statements
-                class StatementBuilder {
-                    public:
-
-                        class no_label : public std::exception {};
-                        class no_token : public std::exception {};
-
-                        bool is_label_assigned() const {
-                            return label_assigned;
+                    NodeType top_type() const {
+                        if (!done()) {
+                            return top().get_node().get_type();
                         }
-                        void set_label(const Node::string base) {
-                            label = base;
-                            label_assigned = true;
-                        }
-                        const Node::string& get_label() const {
-                            if (label_assigned) {
-                                return label;
-                            }
-                            else {
-                                throw no_label();
-                            }
-                        }
-
-                        bool is_node_assigned() const {
-                            return token_assigned;
-                        }
-                        void set_node(const Node base) {
-                            token = base;
-                            token_assigned = true;
-                        }
-                        Node& get_node_mut() {
-                            if (token_assigned) {
-                                return token;
-                            }
-                            else {
-                                throw no_token();
-                            }
-                        }
-                        const Node& get_node() const {
-                            if (token_assigned) {
-                                return token;
-                            }
-                            else {
-                                throw no_token();
-                            }
-                        }
-
-                        void set_label_as_node() {
-                            if (token.get_type() == STRING) {
-                                set_label(token.as_string_reference());
-                                token = Node();
-                                token_assigned = false;
-                            }
-                            else {
-                                //throw
-                            }
-                        }
-                    private:
-                        Node::string label;
-                        bool label_assigned = false;
-
-                        Node token;
-                        bool token_assigned = false;
-                };
-
-                bool top_is_array() {
-                    return top_type() == ARRAY;
-                }
-
-                bool top_is_object() {
-                    return top_type() == OBJECT;
-                }
-
-                void push_array() {
-                    Node dummy = Node(Node::array());
-                    current.set_node(dummy);
-                    push_current();
-                }
-
-                void push_object() {
-                    Node dummy = Node(Node::object());
-                    current.set_node(dummy);
-                    push_current();
-                }
-
-                void push_current() {
-                    nest_stack.push(current);
-                    current = StatementBuilder();
-                }
-
-                void pop() {
-                    if (current.is_node_assigned()) {
-                        append_to_top(current);
-                    }
-                    #if !JSON_ALLOW_TRAILING_COMMA
-                    else {
-                        throw json::trailing_comma();
-                    }
-                    #endif
-                    StatementBuilder popped = top();
-                    nest_stack.pop();
-                    if (nest_stack.size() == 0) {
-                        root = popped.get_node();
-                        _done = true;
-                        return;
-                    }
-                    else {
-                        current = popped;
-                    }
-                    
-                    //append_to_top(popped);
-                }
-
-                void append_to_top(const StatementBuilder& st) {
-                    if (top_is_object()) {
-                        try {
-                            const Node::string label = st.get_label();
-                            Node::object& map = top_mut().get_node_mut().as_object_mut();
-                            if (map.count(label) > 0) throw json::duplicate_label();
-                            map[label] = st.get_node();
-                        }
-                        catch (StatementBuilder::no_label& e) {
-                            throw json::missing_label();
+                        else {
+                            return root.get_type();
                         }
                     }
-                    else if (top_is_array()) {
-                        if (st.is_label_assigned()) {
-                            throw json::label_in_array();
-                        }
-                        try {
-                            Node::array& array = top_mut().get_node_mut().as_array_mut();
-                            array.push_back(st.get_node());
-                        }
-                        catch (StatementBuilder::no_token& e) {
-                            throw json::missing_definition();
-                        }
+
+                    StatementBuilder& top_mut() {
+                        return nest_stack.top();
                     }
-                }
-                
-                NodeType top_type() const {
-                    if (!done()) {
-                        return top().get_node().get_type();
+
+                    const StatementBuilder& top() const {
+                        return nest_stack.top();
                     }
-                    else {
-                        return root.get_type();
-                    }
-                }
 
-                StatementBuilder& top_mut() {
-                    return nest_stack.top();
-                }
+                    std::stack<StatementBuilder> nest_stack;
+                    StatementBuilder current;
 
-                const StatementBuilder& top() const {
-                    return nest_stack.top();
-                }
+                    // only valid after everything is popped
+                    bool _done = false;
+                    Node root;
+            };
 
-                std::stack<StatementBuilder> nest_stack;
-                StatementBuilder current;
+            ParseHelper helper;
 
-                // only valid after everything is popped
-                bool _done = false;
-                Node root;
-        };
-
-        ParseHelper helper;
-
-        //pushes initial object
-        helper.parse_token(get_next_json_token(stream));
-
-        while (!stream.eof() && !helper.done())
-        {
+            //pushes initial object
             helper.parse_token(get_next_json_token(stream));
-        }
-        
-        return Node(helper.get_root());
 
+            while (!stream.eof() && !helper.done())
+            {
+                helper.parse_token(get_next_json_token(stream));
+            }
+            
+            return Node(helper.get_root());
+
+        }
     }
+
+    /*
+        =============================================
+
+                 MESSAGEPACK SECTION
+    
+        =============================================
+    */
+    namespace messagepack {
+
+    } // end of namespace messagepack
 
 }
 
@@ -1216,7 +1239,7 @@ TEST(multitype, to_json) {
             {"my_int", Node(test_number)}
         });
 
-    std::string as_json = obj_node.as_json_string();
+    std::string as_json = sjson::json::node_to_json_string(obj_node);
 
     DEBUG_PRINT('\n' << as_json);
 }
@@ -1312,36 +1335,36 @@ TEST(json_parsing, type_detection) {
 TEST(json_parser, type_detection) {
     {
         const std::string str = "\"string or ... something";
-        EXPECT_EQ(sjson::detect_node_type_str(str), sjson::STRING);
+        EXPECT_EQ(sjson::json::detect_node_type_str(str), sjson::STRING);
     }
     {
         const std::string str = "262.848";
-        EXPECT_EQ(sjson::detect_node_type_str(str), sjson::REAL);
+        EXPECT_EQ(sjson::json::detect_node_type_str(str), sjson::REAL);
     }
     {
         const std::string str = "44866";
-        EXPECT_EQ(sjson::detect_node_type_str(str), sjson::INTEGER);
+        EXPECT_EQ(sjson::json::detect_node_type_str(str), sjson::INTEGER);
     }
     {
         const std::string str = "nULl";
-        EXPECT_EQ(sjson::detect_node_type_str(str), sjson::NONE);
+        EXPECT_EQ(sjson::json::detect_node_type_str(str), sjson::NONE);
     }
 }
 
 TEST(json_parser, string_translation) {
     {
         const std::string str = "\"string or ... something";
-        EXPECT_EQ(sjson::parse_str_to_node(str).as_string(), str.substr(1));
+        EXPECT_EQ(sjson::json::parse_str_to_node(str).as_string(), str.substr(1));
     }
     {
         const std::string str = "262.848";
         const float test_value = 262.848;
-        EXPECT_EQ(sjson::parse_str_to_node(str).as_real(), test_value);
+        EXPECT_EQ(sjson::json::parse_str_to_node(str).as_real(), test_value);
     }
     {
         const std::string str = "44866";
         const long int test_value = 44866;
-        EXPECT_EQ(sjson::parse_str_to_node(str).as_int(), test_value);
+        EXPECT_EQ(sjson::json::parse_str_to_node(str).as_int(), test_value);
     }
 }
 
@@ -1352,18 +1375,18 @@ TEST(json_parser, tokenizer) {
     auto stream_proto = std::istringstream(test_str);
     std::istream& stream = stream_proto;
 
-    ASSERT_EQ(sjson::get_next_json_token(stream),"{");
-    ASSERT_EQ(sjson::get_next_json_token(stream),"fortnite");
-    ASSERT_EQ(sjson::get_next_json_token(stream),",");
-    ASSERT_EQ(sjson::get_next_json_token(stream),"balls");
-    ASSERT_EQ(sjson::get_next_json_token(stream),":");
-    ASSERT_EQ(sjson::get_next_json_token(stream),"\"i'm   }");
-    ASSERT_EQ(sjson::get_next_json_token(stream),"gay");
-    ASSERT_EQ(sjson::get_next_json_token(stream),"I");
-    ASSERT_EQ(sjson::get_next_json_token(stream),",");
-    ASSERT_EQ(sjson::get_next_json_token(stream),"like");
-    ASSERT_EQ(sjson::get_next_json_token(stream),"]");
-    ASSERT_EQ(sjson::get_next_json_token(stream),"boys");
+    ASSERT_EQ(sjson::json::get_next_json_token(stream),"{");
+    ASSERT_EQ(sjson::json::get_next_json_token(stream),"fortnite");
+    ASSERT_EQ(sjson::json::get_next_json_token(stream),",");
+    ASSERT_EQ(sjson::json::get_next_json_token(stream),"balls");
+    ASSERT_EQ(sjson::json::get_next_json_token(stream),":");
+    ASSERT_EQ(sjson::json::get_next_json_token(stream),"\"i'm   }");
+    ASSERT_EQ(sjson::json::get_next_json_token(stream),"gay");
+    ASSERT_EQ(sjson::json::get_next_json_token(stream),"I");
+    ASSERT_EQ(sjson::json::get_next_json_token(stream),",");
+    ASSERT_EQ(sjson::json::get_next_json_token(stream),"like");
+    ASSERT_EQ(sjson::json::get_next_json_token(stream),"]");
+    ASSERT_EQ(sjson::json::get_next_json_token(stream),"boys");
 }
 
 TEST(json_parser, basic_file) {
@@ -1371,8 +1394,8 @@ TEST(json_parser, basic_file) {
     auto stream_proto = std::istringstream(test_str);
     std::istream& stream = stream_proto;
     
-    Node parsed = sjson::Node::parse_from_istream(stream);
-    DEBUG_PRINT("PARSE RESULT:\n" << parsed.as_json_string());
+    Node parsed = sjson::json::parse_from_istream(stream);
+    DEBUG_PRINT("PARSE RESULT:\n" << sjson::json::node_to_json_string(parsed));
 
     ASSERT_EQ(parsed.get_type(), sjson::OBJECT);
     ASSERT_TRUE(parsed.as_object().count("basic") > 0);
@@ -1386,8 +1409,8 @@ TEST(json_parser, basic_file) {
 // this crashes, todo
 TEST(json_parser, all_types) {
     std::ifstream stream("tests/all_types.json");
-    Node parsed = sjson::Node::parse_from_istream(stream);
-    DEBUG_PRINT("PARSE RESULT:\n" << parsed.as_json_string());
+    Node parsed = sjson::json::parse_from_istream(stream);
+    DEBUG_PRINT("PARSE RESULT:\n" << sjson::json::node_to_json_string(parsed));
 }
 
 int main() {
