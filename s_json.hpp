@@ -218,9 +218,9 @@ namespace sjson
 
     };
 
-    
+    //todo: whats
     namespace json {
-        class json_invalid : public std::exception {};
+        class json_invalid : public std::exception {char* what();};
         class missing_delimeter : public json_invalid {};
         class missing_label : public json_invalid {};
         class wrong_delimeter : public json_invalid {};
@@ -232,8 +232,8 @@ namespace sjson
         class missing_definition: public json_invalid{};
 
         Node parse_from_istream(std::istream&);
-        Node from_file_path(std::string);
-        Node parse_from_string(std::string);
+        Node from_file_path(const std::string&);
+        Node parse_from_string(const std::string&);
         Node parse_from_string(const char*);
 
         void write_node_to_file(const Node& node, const std::string& path);
@@ -251,6 +251,7 @@ namespace sjson
 
 #ifdef SJSON_OBJECT
 #include <cassert>
+#include <fstream>
 
 #ifdef SJSON_TEST
 #include <iostream>
@@ -896,7 +897,7 @@ namespace sjson {
             while (isspace(c)) {stream.get(c);}
 
             if (json_is_delimeter(c)) return std::string(1,c);
-            if (c == QUOTE_OPEN) {string = true;}
+            if (c == QUOTE_OPEN) string = true;
 
             collect << c;
 
@@ -1179,6 +1180,22 @@ namespace sjson {
             return Node(helper.get_root());
 
         }
+
+        Node from_file_path(const std::string& path) {
+            std::ifstream stream(path);
+            return parse_from_istream(stream);
+        }
+
+        Node parse_from_string(const std::string& str) {
+            std::istringstream stream(str);
+            return parse_from_istream(stream);
+        }
+
+        Node parse_from_istream(const char* str) {
+            std::istringstream stream (str);
+            return parse_from_istream(stream);
+        }
+
     }
 
     /*
