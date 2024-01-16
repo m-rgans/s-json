@@ -1,11 +1,11 @@
 {
+    "my int" : 75,
+    "my_real" : 98.5,
+    "my_null" : null,
     "my_array" : [1,2,3,4],
     "my_object" : {
         "member_1" : 1,
         "member_2" : 2,
         "" : "blank"
-    },
-    "my int" : 75,
-    "my_real" : 98.5,
-    "my_null" : null
+    }
 }
