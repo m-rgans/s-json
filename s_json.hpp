@@ -138,7 +138,7 @@ namespace sjson
             };
 
             //todo
-            MultiTypeBase* variant;
+            MultiTypeBase* variant = nullptr;
 
             class Mnull : public MultiTypeBase {
                 public:
@@ -479,7 +479,7 @@ namespace sjson {
     }
 
     Node::Node(const Node& base) {
-        variant = base.variant;
+        _copy_variant(base);
     }
 
     Node::Node(const string& content) {
@@ -592,12 +592,12 @@ namespace sjson {
     }
 
     void Node::_destroy_variant() {
-        delete variant;
+         delete variant;
         variant = nullptr;
     }
 
     void Node::_copy_variant(const Node& base) {
-        _destroy_variant();
+        if (variant != nullptr) _destroy_variant();
         
         switch (base.get_type())
         {
